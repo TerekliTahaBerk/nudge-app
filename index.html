@@ -1,0 +1,1453 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="Gentle" />
+  <meta name="theme-color" content="#faf7f2" />
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="apple-touch-icon" href="/icon.svg" />
+  <title>Just Gentle Reminders</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { height: 100%; }
+    body {
+      height: 100%; overflow: hidden;
+      background: #faf7f2;
+      font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
+      color: #2a2723;
+      -webkit-font-smoothing: antialiased;
+      -webkit-text-size-adjust: 100%;
+    }
+    input, textarea { -webkit-appearance: none; border-radius: 0; }
+    button { -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+    #root { height: 100%; display: flex; flex-direction: column; }
+
+    @keyframes jgrLogoDot {
+      0%   { transform: scale(0); opacity: 0; }
+      50%  { transform: scale(1.15); opacity: 1; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    @keyframes jgrLogoRing {
+      0%   { transform: scale(0.5); opacity: 0; }
+      100% { transform: scale(1); opacity: 1; }
+    }
+    @keyframes jgrFadeUp {
+      0%   { transform: translateY(8px); opacity: 0; }
+      100% { transform: translateY(0); opacity: 1; }
+    }
+    @keyframes jgrFadeOut {
+      0%   { opacity: 1; }
+      100% { opacity: 0; }
+    }
+    @keyframes jgrPulse {
+      0%, 100% { opacity: 0.35; transform: scale(0.82); }
+      50%      { opacity: 1;    transform: scale(1); }
+    }
+    @keyframes jgrBannerIn {
+      0%   { transform: translateY(-110%); opacity: 0; }
+      100% { transform: translateY(0);     opacity: 1; }
+    }
+    @keyframes jgrBannerOut {
+      0%   { transform: translateY(0);     opacity: 1; }
+      100% { transform: translateY(-110%); opacity: 0; }
+    }
+  </style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js"
+  integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L"
+  crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js"
+  integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm"
+  crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js"
+  integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y"
+  crossorigin="anonymous"></script>
+
+<script type="text/babel">
+// ─────────────────────────────────────────────────────────────────────────────
+// DESIGN SYSTEM
+// ─────────────────────────────────────────────────────────────────────────────
+
+const T = {
+  bg:      'oklch(0.985 0.004 75)',
+  surf:    'oklch(1.000 0.002 75)',
+  scrim:   'rgba(28, 24, 18, 0.18)',
+  t1:      'oklch(0.22 0.005 70)',
+  t2:      'oklch(0.50 0.006 70)',
+  t3:      'oklch(0.68 0.006 70)',
+  t4:      'oklch(0.82 0.006 70)',
+  sand:    'oklch(0.95 0.015 70)',
+  font:    '-apple-system, "SF Pro Text", "SF Pro Display", system-ui, sans-serif',
+};
+
+const CATS = {
+  body: { hue: 'oklch(0.88 0.035 80)',  ink: 'oklch(0.55 0.05 70)'  },
+  move: { hue: 'oklch(0.88 0.035 150)', ink: 'oklch(0.50 0.05 150)' },
+  mind: { hue: 'oklch(0.88 0.035 250)', ink: 'oklch(0.50 0.05 250)' },
+  grow: { hue: 'oklch(0.88 0.035 30)',  ink: 'oklch(0.55 0.05 30)'  },
+  none: { hue: 'transparent',            ink: T.t2 },
+};
+
+function inferCat(text) {
+  const s = (text || '').toLowerCase();
+  if (/water|drink|eat|sleep|rest|break|stretch|food|meal/.test(s))    return 'body';
+  if (/walk|outside|step|move|run|stand|exercise|gym/.test(s))         return 'move';
+  if (/breathe|meditat|read|think|journal|pause|reflect|book/.test(s)) return 'mind';
+  if (/learn|practice|write|call|message|connect|plan|study/.test(s))  return 'grow';
+  return 'none';
+}
+
+function todayStr() { return new Date().toISOString().slice(0, 10); }
+
+function fmtDate(d) {
+  const date   = d instanceof Date ? d : new Date(d);
+  const today  = new Date(); today.setHours(0,0,0,0);
+  const target = new Date(date); target.setHours(0,0,0,0);
+  const diff   = Math.round((target - today) / 86400000);
+  if (diff === 0)  return 'Today';
+  if (diff === 1)  return 'Tomorrow';
+  if (diff === -1) return 'Yesterday';
+  return date.toLocaleDateString('en-US', { weekday: 'short', day: '2-digit' });
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ADAPTIVE ENGINE
+// Brain of the app: scoring, smart timing, anti-annoyance.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const Engine = {
+  HALF_LIFE: 7 * 24 * 60 * 60 * 1000, // 7 days
+
+  // Weighted effectiveness score. Recent interactions count more.
+  score(interactions = []) {
+    const now = Date.now();
+    return interactions.reduce((sum, i) => {
+      const w = Math.pow(0.5, (now - i.ts) / this.HALF_LIFE);
+      return sum + ({ completed: 2, skipped: -1, ignored: -2 }[i.type] ?? 0) * w;
+    }, 0);
+  },
+
+  // Per-hour completion weights learned from history.
+  learnedHours(interactions = []) {
+    const completions = interactions.filter(i => i.type === 'completed');
+    if (completions.length < 3) return null;
+    const w = new Array(24).fill(0);
+    const now = Date.now();
+    completions.forEach(i => {
+      const h = new Date(i.ts).getHours();
+      w[h] += Math.pow(0.5, (now - i.ts) / this.HALF_LIFE);
+    });
+    return w;
+  },
+
+  isQuiet(hour, settings) {
+    const qs = settings?.quietStart ?? 23;
+    const qe = settings?.quietEnd   ?? 8;
+    return hour >= qs || hour < qe;
+  },
+
+  // Default target hour for each frequency, skipping quiet windows.
+  defaultHour(freq, after, settings) {
+    const slots = { smart: [10, 14, 19], daily: [19], weekly: [10], occasional: [14] }[freq] ?? [10, 14, 19];
+    const ok = slots.filter(h => !this.isQuiet(h, settings));
+    return ok.find(h => h > after) ?? ok[0] ?? 10;
+  },
+
+  // Compute the next nudge timestamp for a reminder.
+  nextNudgeAt(reminder, settings, dailyTotal = 0) {
+    const { interactions = [], freq, dueDate } = reminder;
+    const now = Date.now();
+    const curH = new Date().getHours();
+
+    // Global daily cap
+    if (dailyTotal >= 5) {
+      const tm = new Date();
+      tm.setDate(tm.getDate() + 1);
+      tm.setHours(this.defaultHour(freq, -1, settings), 10, 0, 0);
+      return tm.getTime();
+    }
+
+    // Pinned due-date
+    if (dueDate) {
+      const due = new Date(dueDate); due.setHours(9, 0, 0, 0);
+      return due.getTime() > now ? due.getTime() : now + 5 * 60 * 1000;
+    }
+
+    // Anti-annoyance: exponential backoff on repeated ignores
+    const dayAgo       = now - 86400000;
+    const recentIgn    = interactions.filter(i => i.type === 'ignored' && i.ts > dayAgo).length;
+    if (recentIgn >= 3) {
+      const pauseMs = Math.min(Math.pow(2, recentIgn - 2), 24) * 3600000;
+      return now + pauseMs;
+    }
+
+    // Learn from history or fall back to defaults
+    const hourW = this.learnedHours(interactions);
+    let targetH;
+    if (hourW) {
+      const ranked = hourW
+        .map((w, h) => ({ h, w }))
+        .filter(({ h }) => !this.isQuiet(h, settings))
+        .sort((a, b) => b.w - a.w);
+      if (ranked.length) targetH = ranked[0].h;
+    }
+    if (targetH == null) targetH = this.defaultHour(freq, curH, settings);
+
+    const target = new Date();
+    if (targetH <= curH) target.setDate(target.getDate() + 1);
+    target.setHours(targetH, Math.floor(Math.random() * 30 + 5), 0, 0);
+    return target.getTime();
+  },
+
+  // Should we nudge this reminder right now?
+  shouldNudge(reminder, settings, dailyTotal) {
+    if (reminder.done)   return false;
+    if (dailyTotal >= 5) return false;
+    const now = Date.now();
+    if (reminder.pausedUntil && reminder.pausedUntil > now) return false;
+    return !reminder.nextNudgeAt || reminder.nextNudgeAt <= now;
+  },
+
+  // How many nudges have been sent across all reminders today?
+  dailyTotal(reminders) {
+    const start = new Date(); start.setHours(0, 0, 0, 0);
+    return reminders.reduce((n, r) =>
+      n + (r.interactions ?? []).filter(i => i.ts >= start.getTime()).length, 0);
+  },
+
+  // "Next nudge — in about an hour" preview text.
+  nextNudgePreview(reminders) {
+    const open = reminders.filter(r => !r.done);
+    if (!open.length) return null;
+    const r = open[0];
+    if (r.dueDate) return { slot: fmtDate(r.dueDate) };
+    const h = new Date().getHours();
+    let slot;
+    if      (h < 10) slot = 'mid-morning';
+    else if (h < 13) slot = 'after lunch';
+    else if (h < 17) slot = 'this afternoon';
+    else if (h < 20) slot = 'this evening';
+    else             slot = 'tomorrow morning';
+    return { slot };
+  },
+
+  // Gentle notification body text, non-commanding.
+  nudgeBody(reminder) {
+    const pool = {
+      body: [
+        'A sip of water might feel good.',
+        'A short break could help right now.',
+        'If it feels right, step away for a moment.',
+        'Maybe pause and rest a little?',
+      ],
+      move: [
+        'Perhaps step outside for a moment?',
+        'A little movement might lift your mood.',
+        'Your body might appreciate a gentle stretch.',
+        'A short walk could feel nice.',
+      ],
+      mind: [
+        'A few slow breaths might help.',
+        'A quiet moment could be nice.',
+        'Perhaps a page or two?',
+        'A little stillness might feel good.',
+      ],
+      grow: [
+        'A small step today could feel good.',
+        'Perhaps a moment for this?',
+        'When you\'re ready — no rush.',
+        'This might be a good time.',
+      ],
+      none: [
+        'A gentle nudge, just for you.',
+        'When it feels right.',
+        'No pressure — just a small reminder.',
+        'A little reminder, softly.',
+      ],
+    }[reminder.category ?? 'none'];
+    return pool[Math.floor(Math.random() * pool.length)];
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// STORE — localStorage persistence
+// ─────────────────────────────────────────────────────────────────────────────
+
+const Store = {
+  load() {
+    try {
+      return {
+        name:      localStorage.getItem('jgr_name') ?? '',
+        onboarded: localStorage.getItem('jgr_ob') === '1',
+        reminders: JSON.parse(localStorage.getItem('jgr_rem') ?? 'null'),
+        settings:  JSON.parse(localStorage.getItem('jgr_cfg') ?? 'null'),
+      };
+    } catch { return { name: '', onboarded: false, reminders: null, settings: null }; }
+  },
+  saveName(n)      { localStorage.setItem('jgr_name', n); localStorage.setItem('jgr_ob', '1'); },
+  saveReminders(r) { try { localStorage.setItem('jgr_rem', JSON.stringify(r)); } catch {} },
+  saveSettings(s)  { try { localStorage.setItem('jgr_cfg', JSON.stringify(s)); } catch {} },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NOTIFICATION MANAGER
+// ─────────────────────────────────────────────────────────────────────────────
+
+const Notif = {
+  async ask() {
+    if (!('Notification' in window)) return 'unsupported';
+    if (Notification.permission !== 'default') return Notification.permission;
+    return Notification.requestPermission();
+  },
+  async show(title, body, tag) {
+    if (Notification.permission !== 'granted') return;
+    const reg = navigator.serviceWorker?.controller
+      ? await navigator.serviceWorker.ready.catch(() => null)
+      : null;
+    if (reg?.showNotification) {
+      reg.showNotification(title, { body, tag, icon: '/icon.svg', requireInteraction: false });
+    } else {
+      new Notification(title, { body, tag });
+    }
+  },
+  schedule(id, title, body, delayMs) {
+    navigator.serviceWorker?.controller?.postMessage({ type: 'SCHEDULE', id, title, body, delay: delayMs });
+  },
+  cancel(id) {
+    navigator.serviceWorker?.controller?.postMessage({ type: 'CANCEL', id });
+  },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DATA HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const DEFAULT_SETTINGS = { level: 'medium', smart: true, quietStart: 23, quietEnd: 8 };
+
+const SEED = [
+  { id: 'seed1', text: 'Drink some water',            category: 'body', freq: 'smart', repeat: 'daily', gap: false },
+  { id: 'seed2', text: 'Take a short break',          category: 'body', freq: 'smart', repeat: null,    gap: false },
+  { id: 'seed3', text: 'Step outside for a moment',   category: 'move', freq: 'smart', repeat: null,    gap: true  },
+  { id: 'seed4', text: 'Breathe deeply for a minute', category: 'mind', freq: 'daily', repeat: 'daily', gap: false },
+];
+
+function mkReminder(o = {}) {
+  return {
+    id: 'r' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+    text: '', category: 'none', freq: 'smart',
+    repeat: null, dueDate: null,
+    done: false, doneDate: null, gap: true,
+    createdAt: Date.now(),
+    interactions: [],
+    nextNudgeAt: null, pausedUntil: null,
+    ...o,
+  };
+}
+
+function mkSeed() {
+  return SEED.map(s => mkReminder(s));
+}
+
+// Reset `done` for daily reminders if they were completed on a prior day.
+function refreshDaily(reminders) {
+  const today = todayStr();
+  return reminders.map(r => {
+    if (r.repeat === 'daily' && r.done && r.doneDate && r.doneDate < today) {
+      return { ...r, done: false, doneDate: null };
+    }
+    return r;
+  });
+}
+
+// Record an interaction on a reminder.
+function addInteraction(reminder, type, settings, dailyTotal) {
+  const ts = Date.now();
+  const updated = {
+    ...reminder,
+    interactions: [...(reminder.interactions ?? []), { type, ts }],
+  };
+  // Recalculate next nudge
+  updated.nextNudgeAt = Engine.nextNudgeAt(updated, settings, dailyTotal);
+  // Anti-annoyance pause
+  const dayAgo    = ts - 86400000;
+  const ignCount  = updated.interactions.filter(i => i.type === 'ignored' && i.ts > dayAgo).length;
+  if (ignCount >= 3) {
+    updated.pausedUntil = ts + Math.min(Math.pow(2, ignCount - 2), 24) * 3600000;
+  }
+  return updated;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ATOMS
+// ─────────────────────────────────────────────────────────────────────────────
+
+function Eyebrow({ children, style }) {
+  return (
+    <div style={{
+      fontFamily: T.font, fontSize: 11, fontWeight: 500,
+      letterSpacing: 1.8, textTransform: 'uppercase', color: T.t3, ...style,
+    }}>{children}</div>
+  );
+}
+
+function Logo({ size = 36, animate = false }) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      width: size, height: size, position: 'relative', flexShrink: 0,
+    }}>
+      <span style={{
+        position: 'absolute', inset: 0, borderRadius: '50%',
+        border: `0.75px solid ${T.t4}`,
+        opacity:   animate ? 0 : 1,
+        animation: animate ? 'jgrLogoRing 1100ms cubic-bezier(.2,.7,.2,1) 200ms forwards' : 'none',
+      }} />
+      <span style={{
+        width: size * 0.22, height: size * 0.22, borderRadius: '50%',
+        background: T.t1,
+        transform:  animate ? 'scale(0)' : 'scale(1)',
+        animation:  animate ? 'jgrLogoDot 900ms cubic-bezier(.2,.7,.2,1) forwards' : 'none',
+      }} />
+    </span>
+  );
+}
+
+function Checkbox({ done }) {
+  return (
+    <span role="presentation" style={{
+      width: 24, height: 24, flexShrink: 0,
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      position: 'relative',
+    }}>
+      <span style={{
+        width: 16, height: 16, borderRadius: '50%', boxSizing: 'border-box',
+        border: `0.75px solid ${done ? T.t4 : T.t3}`,
+        transition: 'border-color 480ms cubic-bezier(.2,.7,.2,1)',
+      }} />
+      <span style={{
+        position: 'absolute',
+        width: 5, height: 5, borderRadius: '50%', background: T.t1,
+        opacity:   done ? 0.7 : 0,
+        transform: done ? 'scale(1)' : 'scale(0.4)',
+        transition: 'opacity 480ms cubic-bezier(.2,.7,.2,1), transform 480ms cubic-bezier(.2,.7,.2,1)',
+      }} />
+    </span>
+  );
+}
+
+// Toggle switch atom
+function Toggle({ on, onToggle }) {
+  return (
+    <button onClick={onToggle} role="switch" aria-checked={on} style={{
+      appearance: 'none', border: 'none', cursor: 'pointer', flexShrink: 0,
+      width: 34, height: 20, borderRadius: 999, padding: 0,
+      background: on ? T.t1 : T.t4,
+      position: 'relative', transition: 'background 300ms ease',
+    }}>
+      <span style={{
+        position: 'absolute', top: 3, left: on ? 17 : 3,
+        width: 14, height: 14, borderRadius: '50%',
+        background: T.surf,
+        transition: 'left 300ms cubic-bezier(.2,.7,.2,1)',
+        boxShadow: '0 1px 2px rgba(28,24,18,0.12)',
+      }} />
+    </button>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REMINDER ROW — swipe-to-remove, category capsule, smart dot, date badge
+// ─────────────────────────────────────────────────────────────────────────────
+
+function ReminderRow({ r, onToggle, onRemove }) {
+  const cat      = CATS[r.category ?? 'none'];
+  const hasCat   = r.category && r.category !== 'none';
+  const smart    = r.freq === 'smart' && !r.dueDate && !r.done;
+  const [dx, setDx]         = React.useState(0);
+  const [revealed, setRev]  = React.useState(false);
+  const startX   = React.useRef(null);
+  const moved    = React.useRef(false);
+
+  const onDown = e => {
+    startX.current = (e.touches ? e.touches[0] : e).clientX;
+    moved.current = false;
+  };
+  const onMove = e => {
+    if (startX.current == null) return;
+    const d = (e.touches ? e.touches[0] : e).clientX - startX.current;
+    if (Math.abs(d) > 6) moved.current = true;
+    if      (d < 0)      setDx(Math.max(d, -88));
+    else if (revealed)   setDx(Math.min(-88 + d, 0));
+  };
+  const onUp = () => {
+    if (startX.current == null) return;
+    startX.current = null;
+    if (dx < -44) { setDx(-72); setRev(true); }
+    else          { setDx(0);   setRev(false); }
+  };
+  const handleClick = () => {
+    if (moved.current) { moved.current = false; return; }
+    if (revealed)      { setDx(0); setRev(false); return; }
+    onToggle?.();
+  };
+
+  return (
+    <div style={{ position: 'relative', overflow: 'hidden' }}>
+      {/* Remove action */}
+      <div style={{
+        position: 'absolute', right: 0, top: 0, bottom: 0,
+        display: 'flex', alignItems: 'center', paddingRight: 22,
+        pointerEvents: revealed ? 'auto' : 'none',
+      }}>
+        <button onClick={() => { setDx(0); setRev(false); onRemove?.(r.id); }} style={{
+          appearance: 'none', border: 'none', background: 'transparent',
+          fontFamily: T.font, fontSize: 13, fontWeight: 400,
+          letterSpacing: -0.05, color: T.t2, padding: '6px 0', cursor: 'pointer',
+        }}>Remove</button>
+      </div>
+
+      <button
+        onClick={handleClick}
+        onMouseDown={onDown} onMouseMove={onMove} onMouseUp={onUp} onMouseLeave={onUp}
+        onTouchStart={onDown} onTouchMove={onMove} onTouchEnd={onUp}
+        style={{
+          appearance: 'none', border: 'none', background: T.bg,
+          padding: '20px 0 20px 16px', margin: 0,
+          width: '100%', textAlign: 'left',
+          display: 'flex', alignItems: 'center', gap: 18,
+          cursor: 'pointer', position: 'relative',
+          transform: `translateX(${dx}px)`,
+          transition: startX.current == null ? 'transform 380ms cubic-bezier(.2,.7,.2,1)' : 'none',
+        }}>
+        {/* Category capsule */}
+        <span aria-hidden style={{
+          position: 'absolute', left: 0, top: 22, bottom: 22,
+          width: 3, borderRadius: 2,
+          background: cat.hue,
+          opacity: hasCat ? (r.done ? 0.25 : 0.75) : 0,
+          transition: 'opacity 480ms cubic-bezier(.2,.7,.2,1)',
+        }} />
+        <Checkbox done={r.done} />
+        <span style={{
+          fontFamily: T.font, fontSize: 17, fontWeight: 400,
+          lineHeight: '24px', letterSpacing: -0.2, flex: 1,
+          color: r.done ? T.t3 : T.t1,
+          textDecoration: r.done ? 'line-through' : 'none',
+          textDecorationColor: T.t4, textDecorationThickness: '0.75px',
+          transition: 'all 480ms cubic-bezier(.2,.7,.2,1)',
+          opacity: r.done ? 0.45 : 1,
+        }}>{r.text}</span>
+
+        {/* Smart-timing pulse dot */}
+        {smart && (
+          <span aria-label="smart timing" style={{
+            width: 4, height: 4, borderRadius: '50%',
+            background: T.t3, marginRight: -4, flexShrink: 0,
+          }} />
+        )}
+
+        {/* Repeat glyph or due-date badge */}
+        {(r.repeat === 'daily' || r.dueDate) && (
+          <span style={{
+            fontFamily: T.font, fontSize: 11.5, fontWeight: 400,
+            color: T.t3, letterSpacing: 0.1, flexShrink: 0,
+            opacity: r.done ? 0.35 : 0.8,
+            fontVariantNumeric: 'tabular-nums',
+          }}>
+            {r.dueDate ? fmtDate(r.dueDate) : '↻'}
+          </span>
+        )}
+      </button>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// MINI CALENDAR
+// ─────────────────────────────────────────────────────────────────────────────
+
+function MiniCalendar({ value, onChange }) {
+  const today = React.useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
+  const [view, setView] = React.useState(() => {
+    const d = value ? new Date(value) : new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const monthLabel = view.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const firstDow = (view.getDay() + 6) % 7; // Mon=0
+  const days = new Date(view.getFullYear(), view.getMonth() + 1, 0).getDate();
+  const cells = [];
+  for (let i = 0; i < firstDow; i++) cells.push(null);
+  for (let d = 1; d <= days; d++) cells.push(new Date(view.getFullYear(), view.getMonth(), d));
+  while (cells.length % 7) cells.push(null);
+  const same = (a, b) => a && b && new Date(a).setHours(0,0,0,0) === new Date(b).setHours(0,0,0,0);
+  const nav = delta => setView(v => new Date(v.getFullYear(), v.getMonth() + delta, 1));
+
+  return (
+    <div style={{ borderTop: `0.75px solid ${T.t4}`, paddingTop: 16 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+        <button onClick={() => nav(-1)} aria-label="previous" style={navBtnStyle()}>‹</button>
+        <span style={{ fontSize: 13.5, fontWeight: 500, color: T.t1, letterSpacing: -0.1 }}>{monthLabel}</span>
+        <button onClick={() => nav(1)}  aria-label="next"     style={navBtnStyle()}>›</button>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7, 1fr)', gap: 2 }}>
+        {['M','T','W','T','F','S','S'].map((d, i) => (
+          <div key={i} style={{ textAlign: 'center', fontSize: 10, color: T.t3, letterSpacing: 1, padding: '4px 0' }}>{d}</div>
+        ))}
+        {cells.map((d, i) => {
+          if (!d) return <div key={i} />;
+          const isTd  = d.getTime() === today.getTime();
+          const isSel = same(d, value);
+          return (
+            <button key={i} onClick={() => onChange(new Date(d))} style={{
+              appearance: 'none', border: 'none', cursor: 'pointer', borderRadius: 999,
+              height: 32, padding: 0, fontFamily: T.font, fontSize: 13, letterSpacing: -0.1,
+              fontVariantNumeric: 'tabular-nums',
+              fontWeight: isSel ? 500 : 400,
+              background: isSel ? T.t1 : 'transparent',
+              color: isSel ? T.bg : T.t1,
+              position: 'relative', transition: 'all 180ms ease',
+            }}>
+              {d.getDate()}
+              {isTd && !isSel && (
+                <span style={{
+                  position: 'absolute', left: '50%', bottom: 4, transform: 'translateX(-50%)',
+                  width: 3, height: 3, borderRadius: '50%', background: T.t2,
+                }} />
+              )}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+function navBtnStyle() {
+  return {
+    appearance: 'none', border: 'none', background: 'transparent', cursor: 'pointer',
+    padding: '4px 10px', fontFamily: T.font, fontSize: 18, fontWeight: 300,
+    color: T.t2, lineHeight: 1,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// DUE-DATE PICKER
+// ─────────────────────────────────────────────────────────────────────────────
+
+function DueDatePicker({ value, onChange }) {
+  const [showCal, setShowCal] = React.useState(false);
+  const today   = React.useMemo(() => { const d = new Date(); d.setHours(0,0,0,0); return d; }, []);
+  const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
+  const weekend  = new Date(today);
+  weekend.setDate(today.getDate() + ((6 - today.getDay() + 7) % 7 || 7));
+
+  const same = (a, b) => a && b && new Date(a).setHours(0,0,0,0) === new Date(b).setHours(0,0,0,0);
+  const chips = [
+    { id: 'today',   label: 'Today',    d: today },
+    { id: 'tmrw',    label: 'Tomorrow', d: tomorrow },
+    { id: 'weekend', label: 'Weekend',  d: weekend },
+  ];
+  const pick = d => { same(value, d) ? onChange(null) : onChange(d); };
+  const isCustom = value && !chips.some(c => same(value, c.d));
+
+  return (
+    <div>
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14,
+      }}>
+        <span style={{ fontFamily: T.font, fontSize: 15, fontWeight: 400, color: T.t1, letterSpacing: -0.1 }}>On a date</span>
+        {value && (
+          <button onClick={() => { onChange(null); setShowCal(false); }} style={{
+            appearance: 'none', border: 'none', background: 'transparent',
+            padding: 0, cursor: 'pointer', fontFamily: T.font, fontSize: 12, color: T.t3, letterSpacing: 0.1,
+          }}>Clear</button>
+        )}
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {chips.map(c => {
+          const active = same(value, c.d);
+          return (
+            <button key={c.id} onClick={() => pick(c.d)} style={chipStyle(active)}>{c.label}</button>
+          );
+        })}
+        <button onClick={() => setShowCal(s => !s)} style={chipStyle(isCustom)}>
+          {isCustom ? fmtDate(value) : 'Pick a day'}
+        </button>
+      </div>
+      {showCal && (
+        <div style={{ marginTop: 16 }}>
+          <MiniCalendar value={value} onChange={d => { onChange(d); setShowCal(false); }} />
+        </div>
+      )}
+    </div>
+  );
+}
+function chipStyle(active) {
+  return {
+    appearance: 'none', cursor: 'pointer', borderRadius: 999, padding: '8px 14px',
+    fontFamily: T.font, fontSize: 13.5, fontWeight: 400, letterSpacing: -0.1,
+    border: `0.75px solid ${active ? T.t2 : T.t4}`,
+    background: active ? T.sand : 'transparent',
+    color: active ? T.t1 : T.t2,
+    transition: 'all 260ms ease',
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SPLASH
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SplashScreen({ onDone }) {
+  React.useEffect(() => {
+    const t = setTimeout(() => onDone?.(), 2200);
+    return () => clearTimeout(t);
+  }, []);
+
+  return (
+    <div style={{
+      height: '100%', background: T.bg,
+      display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+      fontFamily: T.font,
+    }}>
+      <div style={{ animation: 'jgrFadeOut 400ms ease 1800ms forwards' }}>
+        <div style={{ display: 'flex', justifyContent: 'center' }}>
+          <Logo size={56} animate />
+        </div>
+        <div style={{ height: 28 }} />
+        <div style={{
+          fontSize: 15, fontWeight: 300, letterSpacing: -0.1,
+          color: T.t2, textAlign: 'center', lineHeight: '24px',
+          animation: 'jgrFadeUp 700ms cubic-bezier(.2,.7,.2,1) 800ms both',
+        }}>
+          Small nudges,<br />when you need them.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ONBOARDING
+// ─────────────────────────────────────────────────────────────────────────────
+
+function OnboardingScreen({ onContinue }) {
+  const [name, setName] = React.useState('');
+  const ready = name.trim().length > 0;
+
+  const submit = () => {
+    if (!ready) return;
+    Notif.ask(); // request notification permission gently after name entry
+    onContinue(name.trim());
+  };
+
+  return (
+    <div style={{
+      height: '100%', display: 'flex', flexDirection: 'column',
+      background: T.bg, padding: '0 32px', fontFamily: T.font,
+    }}>
+      <div style={{ flex: '0 0 20%' }} />
+      <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 40 }}>
+        <Logo size={32} />
+      </div>
+      <h1 style={{
+        margin: 0, fontSize: 28, fontWeight: 400, lineHeight: '38px',
+        letterSpacing: -0.6, color: T.t1, textAlign: 'center',
+      }}>What should we call you?</h1>
+      <div style={{ height: 10 }} />
+      <p style={{
+        fontSize: 13, fontWeight: 400, lineHeight: '20px',
+        letterSpacing: -0.05, color: T.t3, textAlign: 'center', margin: 0,
+      }}>Just so we can greet you. Stays on this device.</p>
+
+      <div style={{ height: 52 }} />
+      <input
+        value={name} onChange={e => setName(e.target.value)}
+        onKeyDown={e => e.key === 'Enter' && submit()}
+        placeholder="Your name"
+        autoFocus
+        style={{
+          width: '100%', border: 'none', outline: 'none', background: 'transparent',
+          padding: '6px 0', fontFamily: T.font, fontSize: 19, fontWeight: 300,
+          letterSpacing: -0.2, color: T.t1, textAlign: 'center',
+        }}
+      />
+      <div style={{ height: 0.75, background: T.t4, marginTop: 2 }} />
+
+      <div style={{ flex: 1 }} />
+      <div style={{ paddingBottom: 56, display: 'flex', justifyContent: 'center' }}>
+        <button onClick={submit} style={{
+          appearance: 'none', border: 'none', background: 'transparent',
+          fontFamily: T.font, fontSize: 16, fontWeight: 400, letterSpacing: -0.2,
+          color: ready ? T.t1 : T.t3, padding: '12px 24px',
+          cursor: ready ? 'pointer' : 'default',
+          transition: 'color 300ms ease',
+        }}>Continue</button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NEW REMINDER SHEET
+// ─────────────────────────────────────────────────────────────────────────────
+
+const FREQ_OPTIONS = [
+  { id: 'smart',      label: 'Leave it to me',      hint: 'recommended' },
+  { id: 'daily',      label: 'Once a day',           hint: 'evening' },
+  { id: 'weekly',     label: 'A few times a week' },
+  { id: 'occasional', label: 'Now and then' },
+];
+
+function NewReminderSheet({ open, onCancel, onSave }) {
+  const [text,    setText]    = React.useState('');
+  const [freq,    setFreq]    = React.useState('smart');
+  const [daily,   setDaily]   = React.useState(false);
+  const [dueDate, setDueDate] = React.useState(null);
+
+  React.useEffect(() => {
+    if (open) { setText(''); setFreq('smart'); setDaily(false); setDueDate(null); }
+  }, [open]);
+
+  const cat    = inferCat(text);
+  const catHue = CATS[cat].hue;
+  const ready  = text.trim().length > 0;
+
+  return (
+    <>
+      {/* Scrim */}
+      <div onClick={onCancel} style={{
+        position: 'absolute', inset: 0, background: T.scrim,
+        opacity: open ? 1 : 0, pointerEvents: open ? 'auto' : 'none',
+        transition: 'opacity 320ms cubic-bezier(.2,.7,.2,1)', zIndex: 10,
+      }} />
+
+      {/* Sheet */}
+      <div style={{
+        position: 'absolute', left: 0, right: 0, bottom: 0,
+        background: T.surf,
+        borderTopLeftRadius: 28, borderTopRightRadius: 28,
+        boxShadow: '0 -1px 0 rgba(28,24,18,0.04)',
+        transform: open ? 'translateY(0)' : 'translateY(100%)',
+        transition: 'transform 380ms cubic-bezier(.2,.7,.2,1)',
+        zIndex: 20, fontFamily: T.font,
+        padding: '20px 32px 40px',
+        overflowY: 'auto', maxHeight: '90%',
+      }}>
+        {/* Handle */}
+        <div style={{
+          width: 36, height: 4, borderRadius: 999,
+          background: T.t4, opacity: 0.5, margin: '0 auto 28px',
+        }} />
+
+        {/* Text input with live category hint */}
+        <div style={{ position: 'relative' }}>
+          <input
+            autoFocus={open}
+            value={text}
+            onChange={e => setText(e.target.value)}
+            placeholder="What would you like to be reminded of?"
+            style={{
+              width: '100%', border: 'none', outline: 'none', background: 'transparent',
+              padding: '6px 22px 6px 0', fontFamily: T.font,
+              fontSize: 17, fontWeight: 400, letterSpacing: -0.2, color: T.t1,
+            }}
+          />
+          {/* Inferred-category dot */}
+          <span style={{
+            position: 'absolute', right: 0, top: '50%', transform: 'translateY(-50%)',
+            width: 8, height: 8, borderRadius: '50%',
+            background: cat !== 'none' ? catHue : 'transparent',
+            opacity: cat !== 'none' ? 1 : 0,
+            transition: 'all 300ms ease',
+          }} />
+        </div>
+        {/* Category-tinted underline */}
+        <div style={{
+          height: 0.75,
+          background: cat !== 'none' ? catHue : T.t4,
+          marginTop: 2,
+          transition: 'background 300ms ease',
+        }} />
+
+        <div style={{ height: 28 }} />
+
+        {/* Frequency */}
+        <Eyebrow>How often</Eyebrow>
+        <div style={{ height: 18 }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 18 }}>
+          {FREQ_OPTIONS.map(o => {
+            const active = freq === o.id;
+            return (
+              <button key={o.id} onClick={() => setFreq(o.id)} style={{
+                appearance: 'none', border: 'none', background: 'transparent',
+                padding: 0, textAlign: 'left', cursor: 'pointer',
+                fontFamily: T.font, fontSize: 16,
+                fontWeight: active ? 500 : 400, letterSpacing: -0.2,
+                color: active ? T.t1 : T.t3,
+                transition: 'all 260ms ease',
+              }}>
+                {o.label}
+                {o.hint && (
+                  <span style={{ marginLeft: 8, fontWeight: 400, color: active ? T.t3 : T.t4 }}>
+                    · {o.hint}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+
+        <div style={{ height: 28 }} />
+
+        {/* Every day toggle */}
+        <button onClick={() => setDaily(d => !d)} style={{
+          appearance: 'none', border: 'none', background: 'transparent',
+          padding: 0, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+          width: '100%', fontFamily: T.font,
+        }}>
+          <span style={{ fontSize: 15, fontWeight: 400, letterSpacing: -0.1, color: T.t1 }}>Every day</span>
+          <Toggle on={daily} onToggle={() => setDaily(d => !d)} />
+        </button>
+
+        <div style={{ height: 24 }} />
+        <DueDatePicker value={dueDate} onChange={setDueDate} />
+        <div style={{ height: 44 }} />
+
+        {/* Cancel / Save */}
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <button onClick={onCancel} style={{
+            appearance: 'none', border: 'none', background: 'transparent',
+            fontFamily: T.font, fontSize: 15, fontWeight: 400,
+            letterSpacing: -0.1, color: T.t3, padding: '8px 4px', cursor: 'pointer',
+          }}>Cancel</button>
+          <button
+            onClick={() => ready && onSave({ text: text.trim(), freq, daily, dueDate, category: cat })}
+            disabled={!ready}
+            style={{
+              appearance: 'none', border: 'none', background: 'transparent',
+              fontFamily: T.font, fontSize: 15,
+              fontWeight: ready ? 500 : 400, letterSpacing: -0.1,
+              color: ready ? T.t1 : T.t4,
+              padding: '8px 4px', cursor: ready ? 'pointer' : 'default',
+              transition: 'all 260ms ease',
+            }}>Save</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// HOME
+// ─────────────────────────────────────────────────────────────────────────────
+
+function HomeScreen({ name, reminders, onToggle, onRemove, onAdd, onSettings }) {
+  const preview = Engine.nextNudgePreview(reminders);
+  const allDone = reminders.length > 0 && reminders.every(r => r.done);
+
+  return (
+    <div style={{
+      height: '100%', display: 'flex', flexDirection: 'column',
+      background: T.bg, fontFamily: T.font, overflowY: 'auto',
+    }}>
+      {/* Header */}
+      <div style={{
+        display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between',
+        padding: '28px 32px 0', flexShrink: 0,
+      }}>
+        <div>
+          <div style={{ fontSize: 22, fontWeight: 400, letterSpacing: -0.4, color: T.t1 }}>
+            Hello, {name}
+            <span aria-hidden style={{ display: 'inline-block', transform: 'translateY(-1px)', marginLeft: 4 }}>👋</span>
+          </div>
+          <div style={{ marginTop: 4, fontSize: 12.5, fontWeight: 400, letterSpacing: 0.1, color: T.t3 }}>
+            {new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+          </div>
+        </div>
+        <button onClick={onSettings} style={{
+          appearance: 'none', border: 'none', background: 'transparent',
+          fontFamily: T.font, fontSize: 14, fontWeight: 400,
+          letterSpacing: -0.1, color: T.t3, padding: '4px 0', cursor: 'pointer',
+        }}>Settings</button>
+      </div>
+
+      {/* Next nudge preview */}
+      <div style={{ padding: '14px 32px 0', minHeight: 28, flexShrink: 0 }}>
+        {preview ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, letterSpacing: -0.05 }}>
+            <span style={{
+              width: 6, height: 6, borderRadius: '50%', background: T.t2, flexShrink: 0,
+              animation: 'jgrPulse 2400ms ease-in-out infinite',
+            }} />
+            <span style={{ color: T.t3 }}>Next nudge</span>
+            <span style={{ color: T.t4 }}>·</span>
+            <span style={{ color: T.t1, fontWeight: 500 }}>{preview.slot}</span>
+          </div>
+        ) : (
+          <div style={{ fontSize: 13, color: T.t3, opacity: 0.6 }}>All quiet. Nothing pending.</div>
+        )}
+      </div>
+
+      <div style={{ height: 52, flexShrink: 0 }} />
+      <Eyebrow style={{ padding: '0 32px', flexShrink: 0 }}>Today</Eyebrow>
+      <div style={{ height: 24, flexShrink: 0 }} />
+
+      {/* Reminder list */}
+      <div style={{ padding: '0 16px', flexShrink: 0 }}>
+        {reminders.map((r, i) => (
+          <div key={r.id} style={{ marginTop: r.gap && i !== 0 ? 24 : 0 }}>
+            <ReminderRow r={r} onToggle={() => onToggle(r.id)} onRemove={onRemove} />
+          </div>
+        ))}
+        {reminders.length === 0 && (
+          <div style={{ padding: '14px 16px', fontSize: 15, color: T.t3, letterSpacing: -0.1 }}>
+            Nothing for today. That's perfectly fine.
+          </div>
+        )}
+      </div>
+
+      <div style={{ flex: 1 }} />
+
+      {/* Gentle all-done message */}
+      {allDone && (
+        <div style={{
+          padding: '0 32px 10px', fontSize: 13.5, color: T.t2,
+          letterSpacing: -0.05, fontStyle: 'italic',
+          animation: 'jgrFadeUp 600ms cubic-bezier(.2,.7,.2,1) both',
+          flexShrink: 0,
+        }}>That's enough for today.</div>
+      )}
+
+      {/* Add button */}
+      <div style={{ padding: '0 32px 52px', flexShrink: 0 }}>
+        <button onClick={onAdd} style={{
+          appearance: 'none', border: 'none', background: 'transparent',
+          fontFamily: T.font, fontSize: 15, fontWeight: 400,
+          letterSpacing: -0.1, color: T.t3, padding: '6px 0', cursor: 'pointer',
+        }}>
+          <span style={{ marginRight: 8, fontWeight: 300, fontSize: 17 }}>+</span>
+          Add a reminder
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// SETTINGS
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SettingsScreen({ onBack, settings, onSettings }) {
+  const [qStart, setQStart] = React.useState(settings.quietStart ?? 23);
+  const [qEnd,   setQEnd]   = React.useState(settings.quietEnd   ?? 8);
+
+  const save = partial => onSettings({ ...settings, ...partial });
+
+  return (
+    <div style={{
+      height: '100%', display: 'flex', flexDirection: 'column',
+      background: T.bg, fontFamily: T.font, overflowY: 'auto',
+    }}>
+      <div style={{
+        display: 'flex', alignItems: 'baseline', justifyContent: 'space-between',
+        padding: '28px 32px 0', flexShrink: 0,
+      }}>
+        <button onClick={onBack} style={{
+          appearance: 'none', border: 'none', background: 'transparent',
+          fontFamily: T.font, fontSize: 15, fontWeight: 400,
+          letterSpacing: -0.1, color: T.t2, padding: 0, cursor: 'pointer',
+        }}>Back</button>
+        <Eyebrow>Settings</Eyebrow>
+        <span style={{ width: 36 }} />
+      </div>
+
+      <div style={{ height: 52, flexShrink: 0 }} />
+
+      {/* Notification level */}
+      <div style={{ padding: '0 32px', flexShrink: 0 }}>
+        <Eyebrow>Notifications</Eyebrow>
+        <div style={{ height: 22 }} />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {['low', 'medium', 'high'].map(l => {
+            const active = (settings.level ?? 'medium') === l;
+            return (
+              <button key={l} onClick={() => save({ level: l })} style={{
+                appearance: 'none', border: 'none', background: 'transparent',
+                padding: 0, textAlign: 'left', cursor: 'pointer',
+                fontFamily: T.font, fontSize: 17, letterSpacing: -0.2,
+                fontWeight: active ? 500 : 400,
+                color: active ? T.t1 : T.t3,
+                transition: 'all 260ms ease',
+              }}>
+                {l.charAt(0).toUpperCase() + l.slice(1)}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{ height: 44, flexShrink: 0 }} />
+
+      {/* Smart timing */}
+      <div style={{ padding: '0 32px', flexShrink: 0 }}>
+        <Eyebrow>Smart timing</Eyebrow>
+        <div style={{ height: 22 }} />
+        <div style={{
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        }}>
+          <span style={{ fontSize: 17, fontWeight: 400, color: T.t1, letterSpacing: -0.2 }}>
+            Let the app choose moments
+          </span>
+          <Toggle on={!!settings.smart} onToggle={() => save({ smart: !settings.smart })} />
+        </div>
+        <div style={{ height: 8 }} />
+        <p style={{ fontSize: 12.5, color: T.t3, lineHeight: '18px', margin: 0 }}>
+          Nudges arrive when you're likely receptive — never during quiet hours.
+        </p>
+      </div>
+
+      <div style={{ height: 44, flexShrink: 0 }} />
+
+      {/* Quiet hours */}
+      <div style={{ padding: '0 32px', flexShrink: 0 }}>
+        <Eyebrow>Quiet hours</Eyebrow>
+        <div style={{ height: 22 }} />
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 16,
+          fontSize: 17, fontWeight: 400, color: T.t1, letterSpacing: -0.2,
+          fontVariantNumeric: 'tabular-nums',
+        }}>
+          <select value={qStart} onChange={e => { const v = +e.target.value; setQStart(v); save({ quietStart: v }); }}
+            style={selectStyle()}>
+            {Array.from({length:24},(_,i)=>i).map(h=>(
+              <option key={h} value={h}>{String(h).padStart(2,'0')}:00</option>
+            ))}
+          </select>
+          <span style={{ color: T.t3 }}>–</span>
+          <select value={qEnd} onChange={e => { const v = +e.target.value; setQEnd(v); save({ quietEnd: v }); }}
+            style={selectStyle()}>
+            {Array.from({length:24},(_,i)=>i).map(h=>(
+              <option key={h} value={h}>{String(h).padStart(2,'0')}:00</option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div style={{ height: 44, flexShrink: 0 }} />
+
+      {/* Notification permission hint */}
+      {'Notification' in window && Notification.permission !== 'granted' && (
+        <div style={{ padding: '0 32px', flexShrink: 0 }}>
+          <button onClick={() => Notif.ask()} style={{
+            appearance: 'none', border: 'none', background: 'transparent',
+            padding: 0, textAlign: 'left', cursor: 'pointer',
+            fontFamily: T.font, fontSize: 15, fontWeight: 400,
+            letterSpacing: -0.1, color: T.t2,
+          }}>
+            Allow notifications →
+          </button>
+          <p style={{ fontSize: 12.5, color: T.t3, lineHeight: '18px', marginTop: 6 }}>
+            So nudges can reach you even when the app isn't open.
+          </p>
+        </div>
+      )}
+
+      <div style={{ flex: 1, minHeight: 56 }} />
+    </div>
+  );
+}
+
+function selectStyle() {
+  return {
+    appearance: 'none', border: 'none', outline: 'none', background: 'transparent',
+    fontFamily: T.font, fontSize: 17, fontWeight: 400, letterSpacing: -0.2, color: T.t1,
+    cursor: 'pointer', padding: '2px 0',
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// IN-APP NUDGE BANNER
+// Floats at the top. User taps Done or Later.
+// ─────────────────────────────────────────────────────────────────────────────
+
+function NudgeBanner({ nudge, onDone, onLater, onDismiss }) {
+  const [leaving, setLeave] = React.useState(false);
+  const dismiss = cb => { setLeave(true); setTimeout(cb, 380); };
+
+  return (
+    <div style={{
+      position: 'absolute', top: 0, left: 0, right: 0, zIndex: 50,
+      padding: '12px 20px',
+      background: T.surf,
+      borderBottomLeftRadius: 20, borderBottomRightRadius: 20,
+      boxShadow: '0 2px 16px rgba(28,24,18,0.08)',
+      fontFamily: T.font,
+      animation: `${leaving ? 'jgrBannerOut' : 'jgrBannerIn'} 380ms cubic-bezier(.2,.7,.2,1) both`,
+    }}>
+      {/* Category capsule accent */}
+      {nudge.category && nudge.category !== 'none' && (
+        <span style={{
+          display: 'block', width: 3, height: '60%', borderRadius: 2,
+          background: CATS[nudge.category].hue, opacity: 0.75,
+          position: 'absolute', left: 0, top: '20%',
+        }} />
+      )}
+      <div style={{ fontSize: 11.5, fontWeight: 500, color: T.t3, letterSpacing: 1, textTransform: 'uppercase', marginBottom: 4 }}>
+        A small nudge
+      </div>
+      <div style={{ fontSize: 15, fontWeight: 400, color: T.t1, letterSpacing: -0.1, lineHeight: '22px', marginBottom: 14 }}>
+        {nudge.body}
+      </div>
+      <div style={{ display: 'flex', gap: 20 }}>
+        <button onClick={() => dismiss(onDone)} style={bannerBtn(true)}>Done</button>
+        <button onClick={() => dismiss(onLater)} style={bannerBtn(false)}>Later</button>
+        <span style={{ flex: 1 }} />
+        <button onClick={() => dismiss(onDismiss)} style={bannerBtn(false)}>×</button>
+      </div>
+    </div>
+  );
+}
+function bannerBtn(primary) {
+  return {
+    appearance: 'none', border: 'none', background: 'transparent',
+    fontFamily: T.font, fontSize: 14, fontWeight: primary ? 500 : 400,
+    letterSpacing: -0.1, color: primary ? T.t1 : T.t3,
+    padding: 0, cursor: 'pointer',
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ROOT APP
+// ─────────────────────────────────────────────────────────────────────────────
+
+function App() {
+  // ── State ──────────────────────────────────────────────────────
+  const [screen,    setScreen]    = React.useState('splash');
+  const [name,      setName]      = React.useState('');
+  const [reminders, setReminders] = React.useState([]);
+  const [settings,  setSettings]  = React.useState(DEFAULT_SETTINGS);
+  const [sheetOpen, setSheet]     = React.useState(false);
+  const [nudge,     setNudge]     = React.useState(null); // { id, body, category }
+
+  // ── Boot: load from localStorage ───────────────────────────────
+  React.useEffect(() => {
+    const saved = Store.load();
+    if (saved.settings) setSettings({ ...DEFAULT_SETTINGS, ...saved.settings });
+    if (saved.name)     setName(saved.name);
+    if (saved.reminders) {
+      setReminders(refreshDaily(saved.reminders));
+    } else {
+      setReminders(mkSeed());
+    }
+    // Skip splash if already onboarded
+    if (saved.onboarded && saved.name) {
+      setScreen('home');
+    }
+  }, []);
+
+  // ── Persist reminders & settings on change ─────────────────────
+  React.useEffect(() => { if (reminders.length) Store.saveReminders(reminders); }, [reminders]);
+  React.useEffect(() => { Store.saveSettings(settings); }, [settings]);
+
+  // ── Midnight reset: refresh daily reminders ────────────────────
+  React.useEffect(() => {
+    const msToMidnight = () => {
+      const now = new Date();
+      return new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1) - now;
+    };
+    let t;
+    const schedule = () => {
+      t = setTimeout(() => {
+        setReminders(r => refreshDaily(r));
+        schedule();
+      }, msToMidnight());
+    };
+    schedule();
+    return () => clearTimeout(t);
+  }, []);
+
+  // ── Nudge check: runs every 60 s + on focus ────────────────────
+  const checkNudges = React.useCallback((rems, cfg) => {
+    const total = Engine.dailyTotal(rems);
+    // Cap by settings level
+    const cap = { low: 2, medium: 4, high: 6 }[cfg.level ?? 'medium'] ?? 4;
+    if (total >= cap) return;
+
+    const now = Date.now();
+    const candidate = rems.find(r => Engine.shouldNudge(r, cfg, total));
+    if (!candidate) return;
+
+    // Mark as nudged — record a pending interaction so we don't re-fire
+    // (actual completion/skip/ignore is recorded on user action)
+    setNudge({ id: candidate.id, body: Engine.nudgeBody(candidate), category: candidate.category });
+
+    // Also fire a system notification if permission granted
+    Notif.show('A small nudge', Engine.nudgeBody(candidate), `jgr-${candidate.id}`);
+
+    // Schedule next nudge for this reminder
+    setReminders(prev => prev.map(r => {
+      if (r.id !== candidate.id) return r;
+      return { ...r, nextNudgeAt: Engine.nextNudgeAt(r, cfg, total + 1) };
+    }));
+  }, []);
+
+  React.useEffect(() => {
+    const run = () => checkNudges(reminders, settings);
+    const interval = setInterval(run, 60000);
+    const onFocus  = () => run();
+    window.addEventListener('focus',            onFocus);
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('focus',            onFocus);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
+  }, [reminders, settings, checkNudges]);
+
+  // ── Schedule reminders via service worker when list changes ────
+  React.useEffect(() => {
+    if (!navigator.serviceWorker?.controller) return;
+    const now = Date.now();
+    reminders.forEach(r => {
+      if (r.done || !r.nextNudgeAt || r.nextNudgeAt <= now) return;
+      const delay = r.nextNudgeAt - now;
+      if (delay > 0 && delay < 24 * 3600000) {
+        Notif.schedule(r.id, 'A small nudge', Engine.nudgeBody(r), delay);
+      }
+    });
+  }, [reminders]);
+
+  // ── Interactions ───────────────────────────────────────────────
+  const recordInteraction = (id, type) => {
+    setReminders(prev => {
+      const total = Engine.dailyTotal(prev);
+      return prev.map(r => r.id === id ? addInteraction(r, type, settings, total) : r);
+    });
+  };
+
+  const toggleReminder = id => {
+    setReminders(prev => prev.map(r => {
+      if (r.id !== id) return r;
+      const done = !r.done;
+      const updated = { ...r, done, doneDate: done ? todayStr() : null };
+      if (done) {
+        const total = Engine.dailyTotal(prev);
+        return addInteraction(updated, 'completed', settings, total);
+      }
+      return updated;
+    }));
+    Notif.cancel(id);
+  };
+
+  const removeReminder = id => {
+    Notif.cancel(id);
+    setReminders(prev => prev.filter(r => r.id !== id));
+  };
+
+  const addReminder = ({ text, freq, daily, dueDate, category }) => {
+    const r = mkReminder({
+      text, freq, category,
+      repeat: daily ? 'daily' : null,
+      dueDate: dueDate ? dueDate.toISOString().slice(0, 10) : null,
+    });
+    const total = Engine.dailyTotal(reminders);
+    r.nextNudgeAt = Engine.nextNudgeAt(r, settings, total);
+    setReminders(prev => [...prev, r]);
+    setSheet(false);
+  };
+
+  // ── Nudge banner callbacks ─────────────────────────────────────
+  const onNudgeDone = () => {
+    if (nudge) { toggleReminder(nudge.id); }
+    setNudge(null);
+  };
+  const onNudgeLater = () => {
+    if (nudge) { recordInteraction(nudge.id, 'skipped'); }
+    setNudge(null);
+  };
+  const onNudgeDismiss = () => {
+    if (nudge) { recordInteraction(nudge.id, 'ignored'); }
+    setNudge(null);
+  };
+
+  // ── Onboarding complete ────────────────────────────────────────
+  const onOnboard = n => {
+    setName(n);
+    Store.saveName(n);
+    setScreen('home');
+  };
+
+  // ── Update settings ────────────────────────────────────────────
+  const onSettings = s => {
+    setSettings(s);
+    Store.saveSettings(s);
+  };
+
+  // ── Render ─────────────────────────────────────────────────────
+  if (screen === 'splash') {
+    return <SplashScreen onDone={() => setScreen(name ? 'home' : 'onboarding')} />;
+  }
+  if (screen === 'onboarding') {
+    return <OnboardingScreen onContinue={onOnboard} />;
+  }
+
+  return (
+    <div style={{ position: 'relative', height: '100%', overflow: 'hidden', background: T.bg }}>
+      {screen === 'home' && (
+        <HomeScreen
+          name={name}
+          reminders={reminders}
+          onToggle={toggleReminder}
+          onRemove={removeReminder}
+          onAdd={() => setSheet(true)}
+          onSettings={() => setScreen('settings')}
+        />
+      )}
+      {screen === 'settings' && (
+        <SettingsScreen
+          onBack={() => setScreen('home')}
+          settings={settings}
+          onSettings={onSettings}
+        />
+      )}
+      {screen === 'home' && (
+        <NewReminderSheet
+          open={sheetOpen}
+          onCancel={() => setSheet(false)}
+          onSave={addReminder}
+        />
+      )}
+      {nudge && (
+        <NudgeBanner
+          nudge={nudge}
+          onDone={onNudgeDone}
+          onLater={onNudgeLater}
+          onDismiss={onNudgeDismiss}
+        />
+      )}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// BOOT
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Service worker registration
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>

@@ -1,0 +1,13 @@
+{
+  "name": "Just Gentle Reminders",
+  "short_name": "Gentle",
+  "description": "Small nudges, when you need them.",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#faf7f2",
+  "theme_color": "#faf7f2",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

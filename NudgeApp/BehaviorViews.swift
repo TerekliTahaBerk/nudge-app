@@ -244,7 +244,7 @@ struct ThisWeekArea: View {
 
 struct NotificationWithActions: View {
     let title: String
-    let body: String
+    let message: String
 
     var bodyView: some View {
         VStack(spacing: 0) {
@@ -272,7 +272,7 @@ struct NotificationWithActions: View {
                         .font(JGRFont.medium(14))
                         .foregroundStyle(Color.black.opacity(0.95))
                         .tracking(-0.2)
-                    Text(body)
+                    Text(message)
                         .font(JGRFont.regular(13.5))
                         .foregroundStyle(Color.black.opacity(0.78))
                         .tracking(-0.1)

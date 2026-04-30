@@ -11,6 +11,12 @@ struct AddReminderView: View {
     @State private var dueDate: Date?
     @State private var showCalendar = false
 
+    // Reminder kind + payloads
+    @State private var kind: ReminderType = .standard
+    @State private var trigger: TriggerInfo?
+    @State private var voice: VoiceInfo?
+    @State private var link: LinkInfo?
+
     // Live text analysis — updates as the user types
     @State private var analysis     = TextAnalysis(
         category: .none, suggestedFrequency: .smart,
@@ -19,7 +25,37 @@ struct AddReminderView: View {
 
     private var catColor: Color { Color.categoryColor(analysis.category) }
     private var hasCat: Bool    { analysis.category != .none }
-    private var ready: Bool     { !text.trimmingCharacters(in: .whitespaces).isEmpty }
+    private var hasText: Bool   { !text.trimmingCharacters(in: .whitespaces).isEmpty }
+
+    // Saveability rules differ by kind. Voice doesn't need text; trigger needs both.
+    private var ready: Bool {
+        switch kind {
+        case .standard: return hasText
+        case .trigger:  return hasText && trigger != nil
+        case .voice:    return voice != nil
+        case .linked:   return hasText && link?.parentId != nil
+        case .oneoff:   return hasText
+        }
+    }
+
+    private var showFreqAndDate: Bool { kind == .standard }
+
+    private var placeholder: String {
+        switch kind {
+        case .standard: return "What would you like to be reminded of?"
+        case .trigger:  return "What should this remind you of?"
+        case .voice:    return "A short label (optional)"
+        case .linked:   return "And then…"
+        case .oneoff:   return "Just for today, remind me to…"
+        }
+    }
+
+    private var parents: [(UUID, String)] {
+        state.reminders
+            .filter { !$0.isDone && $0.type != .voice }
+            .prefix(4)
+            .map { ($0.id, $0.text) }
+    }
 
     var body: some View {
         NavigationStack {
@@ -42,7 +78,7 @@ struct AddReminderView: View {
                         // Text input with live category underline + dot
                         VStack(spacing: 0) {
                             HStack(alignment: .center) {
-                                TextField("What would you like to be reminded of?", text: $text, axis: .vertical)
+                                TextField(placeholder, text: $text, axis: .vertical)
                                     .font(JGRFont.regular(17))
                                     .foregroundStyle(Color.jgrT1)
                                     .tracking(-0.2)
@@ -111,50 +147,83 @@ struct AddReminderView: View {
 
                         Spacer().frame(height: 28)
 
-                        // ── How often ────────────────────────────────────────
-                        Eyebrow(text: "How often").padding(.horizontal, 32)
+                        // ── Kind ─────────────────────────────────────────────
+                        Eyebrow(text: "Kind").padding(.horizontal, 32)
                         Spacer().frame(height: 18)
+                        ReminderKindSelector(value: $kind)
+                            .padding(.horizontal, 32)
 
-                        VStack(alignment: .leading, spacing: 18) {
-                            ForEach(FrequencyPreference.allCases, id: \.self) { opt in
-                                Button {
-                                    withAnimation(.easeInOut(duration: 0.25)) { frequency = opt }
-                                } label: {
-                                    HStack(spacing: 0) {
-                                        Text(opt.label)
-                                            .font(frequency == opt ? JGRFont.medium(16) : JGRFont.regular(16))
-                                            .foregroundStyle(frequency == opt ? Color.jgrT1 : Color.jgrT3)
-                                            .tracking(-0.2)
-                                        if let hint = opt.hint {
-                                            Text(" · \(hint)")
-                                                .font(JGRFont.regular(16))
-                                                .foregroundStyle(frequency == opt ? Color.jgrT3 : Color.jgrT4)
-                                        }
-                                    }
-                                }
-                                .buttonStyle(.plain)
+                        // Kind-specific accessory
+                        Group {
+                            switch kind {
+                            case .standard:
+                                EmptyView()
+                            case .trigger:
+                                Spacer().frame(height: 28)
+                                TriggerPicker(value: $trigger)
+                                    .padding(.horizontal, 32)
+                            case .voice:
+                                Spacer().frame(height: 22)
+                                VoiceRecorderView(value: $voice)
+                                    .padding(.horizontal, 32)
+                            case .linked:
+                                Spacer().frame(height: 28)
+                                LinkedPicker(parents: parents, value: $link)
+                                    .padding(.horizontal, 32)
+                            case .oneoff:
+                                Spacer().frame(height: 22)
+                                OneoffNote().padding(.horizontal, 32)
                             }
                         }
-                        .padding(.horizontal, 32)
 
-                        Spacer().frame(height: 28)
+                        if showFreqAndDate {
+                            Spacer().frame(height: 28)
 
-                        // ── Every day toggle ──────────────────────────────────
-                        HStack {
-                            Text("Every day")
-                                .font(JGRFont.regular(15))
-                                .foregroundStyle(Color.jgrT1)
-                                .tracking(-0.1)
-                            Spacer()
-                            JGRToggle(isOn: $isRepeating)
-                        }
-                        .padding(.horizontal, 32)
+                            // ── How often ────────────────────────────────────
+                            Eyebrow(text: "How often").padding(.horizontal, 32)
+                            Spacer().frame(height: 18)
 
-                        Spacer().frame(height: 24)
-
-                        // ── Due date picker ───────────────────────────────────
-                        DueDatePickerView(selected: $dueDate, showCalendar: $showCalendar)
+                            VStack(alignment: .leading, spacing: 18) {
+                                ForEach(FrequencyPreference.allCases, id: \.self) { opt in
+                                    Button {
+                                        withAnimation(.easeInOut(duration: 0.25)) { frequency = opt }
+                                    } label: {
+                                        HStack(spacing: 0) {
+                                            Text(opt.label)
+                                                .font(frequency == opt ? JGRFont.medium(16) : JGRFont.regular(16))
+                                                .foregroundStyle(frequency == opt ? Color.jgrT1 : Color.jgrT3)
+                                                .tracking(-0.2)
+                                            if let hint = opt.hint {
+                                                Text(" · \(hint)")
+                                                    .font(JGRFont.regular(16))
+                                                    .foregroundStyle(frequency == opt ? Color.jgrT3 : Color.jgrT4)
+                                            }
+                                        }
+                                    }
+                                    .buttonStyle(.plain)
+                                }
+                            }
                             .padding(.horizontal, 32)
+
+                            Spacer().frame(height: 28)
+
+                            // ── Every day toggle ─────────────────────────────
+                            HStack {
+                                Text("Every day")
+                                    .font(JGRFont.regular(15))
+                                    .foregroundStyle(Color.jgrT1)
+                                    .tracking(-0.1)
+                                Spacer()
+                                JGRToggle(isOn: $isRepeating)
+                            }
+                            .padding(.horizontal, 32)
+
+                            Spacer().frame(height: 24)
+
+                            // ── Due date picker ──────────────────────────────
+                            DueDatePickerView(selected: $dueDate, showCalendar: $showCalendar)
+                                .padding(.horizontal, 32)
+                        }
 
                         // Bottom padding for button
                         Spacer().frame(height: 120)
@@ -189,15 +258,28 @@ struct AddReminderView: View {
     }
 
     private func save() {
+        guard ready else { return }
         let trimmed = text.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return }
-        let finalAnalysis = TextAnalyzer.analyze(trimmed)
+        // For voice with no label, use a soft fallback so it's identifiable in the list.
+        let finalText = trimmed.isEmpty ? "Voice note" : trimmed
+        let finalAnalysis = TextAnalyzer.analyze(finalText)
+
+        // For non-standard kinds, frequency/date are not user-driven —
+        // pin them to sensible defaults so the model and engine stay coherent.
+        let resolvedFrequency: FrequencyPreference = kind == .standard ? frequency : .smart
+        let resolvedRepeating: Bool                = kind == .standard ? isRepeating : false
+        let resolvedDate: Date?                    = kind == .standard ? dueDate : nil
+
         state.addReminder(
-            text: trimmed,
+            text: finalText,
             analysis: finalAnalysis,
-            frequency: frequency,
-            isRepeating: isRepeating,
-            dueDate: dueDate
+            frequency: resolvedFrequency,
+            isRepeating: resolvedRepeating,
+            dueDate: resolvedDate,
+            type: kind,
+            trigger: trigger,
+            voice: voice,
+            link: link
         )
     }
 }

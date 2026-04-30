@@ -19,6 +19,9 @@
 		AA11BB22CC33DD4400000049 /* OnboardingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD4400000029 /* OnboardingView.swift */; };
 		AA11BB22CC33DD440000004A /* AddReminderView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD440000002A /* AddReminderView.swift */; };
 		AA11BB22CC33DD440000004B /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD440000002B /* SettingsView.swift */; };
+		AA11BB22CC33DD440000004C /* ReminderKindsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD440000002C /* ReminderKindsView.swift */; };
+		AA11BB22CC33DD440000004D /* BehaviorViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD440000002D /* BehaviorViews.swift */; };
+		AA11BB22CC33DD440000004E /* BehaviorAnalytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD440000002E /* BehaviorAnalytics.swift */; };
 		AA11BB22CC33DD4400000061 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD4400000060 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -36,6 +39,9 @@
 		AA11BB22CC33DD4400000029 /* OnboardingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = OnboardingView.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD440000002A /* AddReminderView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AddReminderView.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD440000002B /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD440000002C /* ReminderKindsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReminderKindsView.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD440000002D /* BehaviorViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BehaviorViews.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD440000002E /* BehaviorAnalytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BehaviorAnalytics.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD4400000060 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AA11BB22CC33DD4400000070 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -82,6 +88,9 @@
 				AA11BB22CC33DD4400000029 /* OnboardingView.swift */,
 				AA11BB22CC33DD440000002A /* AddReminderView.swift */,
 				AA11BB22CC33DD440000002B /* SettingsView.swift */,
+				AA11BB22CC33DD440000002C /* ReminderKindsView.swift */,
+				AA11BB22CC33DD440000002D /* BehaviorViews.swift */,
+				AA11BB22CC33DD440000002E /* BehaviorAnalytics.swift */,
 				AA11BB22CC33DD4400000060 /* Assets.xcassets */,
 				AA11BB22CC33DD4400000070 /* Info.plist */,
 			);
@@ -169,6 +178,9 @@
 				AA11BB22CC33DD4400000049 /* OnboardingView.swift in Sources */,
 				AA11BB22CC33DD440000004A /* AddReminderView.swift in Sources */,
 				AA11BB22CC33DD440000004B /* SettingsView.swift in Sources */,
+				AA11BB22CC33DD440000004C /* ReminderKindsView.swift in Sources */,
+				AA11BB22CC33DD440000004D /* BehaviorViews.swift in Sources */,
+				AA11BB22CC33DD440000004E /* BehaviorAnalytics.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

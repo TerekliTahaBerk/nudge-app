@@ -88,6 +88,53 @@ enum TimePreference: String, Codable {
     }
 }
 
+// MARK: - Reminder Kind (type)
+
+enum ReminderType: String, Codable, CaseIterable {
+    case standard, trigger, voice, linked, oneoff
+
+    var label: String {
+        switch self {
+        case .standard: return "A reminder"
+        case .trigger:  return "When something happens"
+        case .voice:    return "In my own voice"
+        case .linked:   return "After another"
+        case .oneoff:   return "Just for today"
+        }
+    }
+
+    var hint: String {
+        switch self {
+        case .standard: return "text + timing"
+        case .trigger:  return "a moment or a place"
+        case .voice:    return "5 seconds, on-device"
+        case .linked:   return "follows on"
+        case .oneoff:   return "one-off"
+        }
+    }
+}
+
+// Trigger payload — a "moment" (device event) or a "place" (geofence) or freeform.
+struct TriggerInfo: Codable, Hashable {
+    enum Kind: String, Codable { case moment, place, custom }
+    var kind: Kind
+    var id: String?     // canonical id e.g. "open_laptop"
+    var label: String   // human-readable
+}
+
+// Voice payload — a tiny recording. We store duration + sampled waveform
+// (samples are 0…1 floats used to redraw the waveform).
+struct VoiceInfo: Codable, Hashable {
+    var duration: Double
+    var samples: [Double]
+}
+
+// Linked payload — fires after another reminder is checked, with a delay.
+struct LinkInfo: Codable, Hashable {
+    var parentId: UUID
+    var delayMin: Int
+}
+
 // MARK: - Interaction
 
 enum InteractionType: String, Codable {
@@ -127,6 +174,12 @@ struct Reminder: Identifiable, Codable {
     var nextNudgeAt: Date?
     var pausedUntil: Date?
 
+    // Reminder kind — standard by default. Non-standard kinds carry payloads.
+    var type: ReminderType = .standard
+    var trigger: TriggerInfo?
+    var voice: VoiceInfo?
+    var link: LinkInfo?
+
     let createdAt: Date
 
     // Adaptive score — read-only, always fresh from interactions.
@@ -164,7 +217,35 @@ struct Reminder: Identifiable, Codable {
         self.interactions   = []
         self.nextNudgeAt    = nil
         self.pausedUntil    = nil
+        self.type           = .standard
+        self.trigger        = nil
+        self.voice          = nil
+        self.link           = nil
         self.createdAt      = .now
+    }
+
+    // Custom decoder so reminders saved before kind/trigger/voice/link existed
+    // continue to decode (missing keys default to standard/nil).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id             = try c.decode(UUID.self, forKey: .id)
+        self.text           = try c.decode(String.self, forKey: .text)
+        self.category       = try c.decode(ReminderCategory.self, forKey: .category)
+        self.frequency      = try c.decode(FrequencyPreference.self, forKey: .frequency)
+        self.timePreference = try c.decode(TimePreference.self, forKey: .timePreference)
+        self.isRepeating    = try c.decode(Bool.self, forKey: .isRepeating)
+        self.dueDate        = try c.decodeIfPresent(Date.self, forKey: .dueDate)
+        self.isDone         = try c.decode(Bool.self, forKey: .isDone)
+        self.doneDate       = try c.decodeIfPresent(String.self, forKey: .doneDate)
+        self.hasGap         = try c.decode(Bool.self, forKey: .hasGap)
+        self.interactions   = try c.decode([Interaction].self, forKey: .interactions)
+        self.nextNudgeAt    = try c.decodeIfPresent(Date.self, forKey: .nextNudgeAt)
+        self.pausedUntil    = try c.decodeIfPresent(Date.self, forKey: .pausedUntil)
+        self.type           = try c.decodeIfPresent(ReminderType.self, forKey: .type) ?? .standard
+        self.trigger        = try c.decodeIfPresent(TriggerInfo.self, forKey: .trigger)
+        self.voice          = try c.decodeIfPresent(VoiceInfo.self, forKey: .voice)
+        self.link           = try c.decodeIfPresent(LinkInfo.self, forKey: .link)
+        self.createdAt      = try c.decode(Date.self, forKey: .createdAt)
     }
 
     // MARK: Seed reminders for first launch
@@ -198,6 +279,27 @@ struct AppSettings: Codable {
     var smartTimingEnabled: Bool       = true
     var quietHoursStart: Int           = 23   // 23:00
     var quietHoursEnd: Int             = 8    // 08:00
+
+    // "Read my rhythm" — Behavior layer. On by default; reads interactions to
+    // bias future nudge times. Stays on this device.
+    var receptivityEnabled: Bool       = true
+    // Set true after the user dismisses the eased-back banner; cleared the
+    // next time the engine eases back again.
+    var easedBackAcknowledged: Bool    = false
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.userName              = try c.decodeIfPresent(String.self, forKey: .userName) ?? ""
+        self.onboarded             = try c.decodeIfPresent(Bool.self, forKey: .onboarded) ?? false
+        self.notificationLevel     = try c.decodeIfPresent(NotificationLevel.self, forKey: .notificationLevel) ?? .medium
+        self.smartTimingEnabled    = try c.decodeIfPresent(Bool.self, forKey: .smartTimingEnabled) ?? true
+        self.quietHoursStart       = try c.decodeIfPresent(Int.self, forKey: .quietHoursStart) ?? 23
+        self.quietHoursEnd         = try c.decodeIfPresent(Int.self, forKey: .quietHoursEnd) ?? 8
+        self.receptivityEnabled    = try c.decodeIfPresent(Bool.self, forKey: .receptivityEnabled) ?? true
+        self.easedBackAcknowledged = try c.decodeIfPresent(Bool.self, forKey: .easedBackAcknowledged) ?? false
+    }
 }
 
 // MARK: - Text Analysis Result

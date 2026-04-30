@@ -101,6 +101,29 @@ struct SettingsView: View {
 
                     Spacer().frame(height: 44)
 
+                    // ── Receptivity (Behaviour layer) ───────────────────────
+                    Eyebrow(text: "Behaviour").padding(.horizontal, 32)
+                    Spacer().frame(height: 22)
+
+                    ReceptivityRow(
+                        isOn: $draft.receptivityEnabled,
+                        days: BehaviorAnalytics
+                            .receptivityDots(from: state.reminders)
+                            .map { (day: $0.day, size: $0.size) }
+                    )
+                    .padding(.horizontal, 32)
+
+                    Spacer().frame(height: 44)
+
+                    // ── This week (etiketsiz alan grafiği) ──────────────────
+                    ThisWeekArea(
+                        data: BehaviorAnalytics.weeklyCategoryStack(from: state.reminders),
+                        observation: weeklyObservation()
+                    )
+                    .padding(.horizontal, 32)
+
+                    Spacer().frame(height: 44)
+
                     // ── Notification permission ──────────────────────────────
                     NotifPermissionRow()
 
@@ -110,6 +133,28 @@ struct SettingsView: View {
         }
         .onAppear { draft = state.settings }
         .onDisappear { state.updateSettings(draft) }
+    }
+
+    /// One quiet sentence above the weekly stack — picks up which categories
+    /// dominated and which fell off. Always observation, never goal.
+    private func weeklyObservation() -> String {
+        let week = BehaviorAnalytics.weeklyCategoryStack(from: state.reminders)
+        var totals: [ReminderCategory: Double] = [.body: 0, .move: 0, .mind: 0, .grow: 0]
+        for d in week { for (k, v) in d { totals[k, default: 0] += v } }
+        let nonZero = totals.filter { $0.value > 0.01 }
+        guard !nonZero.isEmpty else { return "A quiet week. Nothing to read into." }
+
+        let sorted  = nonZero.sorted { $0.value > $1.value }
+        let leading = sorted.prefix(2).map { $0.key.displayName }.filter { !$0.isEmpty }
+        let absent  = totals.filter { $0.value < 0.01 }.map { $0.key.displayName }.filter { !$0.isEmpty }
+
+        switch (leading.count, absent.first) {
+        case (2, let a?): return "Mostly \(leading[0]) and \(leading[1]) — \(a) less this week."
+        case (2, _):      return "Mostly \(leading[0]) and \(leading[1]) this week."
+        case (1, let a?): return "Mostly \(leading[0]) — \(a) less this week."
+        case (1, _):      return "Mostly \(leading[0]) this week."
+        default:          return "A quiet week."
+        }
     }
 }
 

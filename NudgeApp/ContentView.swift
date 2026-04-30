@@ -8,6 +8,16 @@ enum Screen: Hashable {
     case splash, onboarding, home, settings
 }
 
+// Which Behavior-layer card, if any, sits above the day's list.
+// Only one banner shows at a time — they share the same slot above "Today".
+enum BehaviorBanner: Equatable {
+    case none
+    case pattern(text: String)
+    case quietHoldback
+    case easedBack
+    case maybeLater
+}
+
 // MARK: - AppState
 // Central store.  All mutation goes through here — views only read.
 
@@ -20,10 +30,12 @@ final class AppState: ObservableObject {
     @Published var settings: AppSettings
     @Published var activeNudge: ActiveNudge?
     @Published var showAddSheet: Bool   = false
+    @Published var behaviorBanner: BehaviorBanner = .none
 
     // ── Internal ───────────────────────────────────────────────────
     private var nudgeTimer: AnyCancellable?
     private var midnightTimer: AnyCancellable?
+    private var maybeLaterTimer: AnyCancellable?
     private let scheduler = NotificationScheduler.shared
 
     // ── Init ───────────────────────────────────────────────────────
@@ -54,6 +66,51 @@ final class AppState: ObservableObject {
         scheduleMidnightReset()
         // Schedule all pending notifications
         await scheduler.scheduleAll(reminders, settings: settings)
+        // Pick the first behaviour observation worth surfacing.
+        await MainActor.run { recomputeBehaviorBanner() }
+    }
+
+    // ── MARK: Behaviour banner resolution ──────────────────────────
+    // Priority (highest first): eased-back > pattern > quiet held-back.
+    // `.maybeLater` is set transiently by nudgeLater() and overrides
+    // the others for ~12 seconds via a timer.
+
+    func recomputeBehaviorBanner() {
+        // maybeLater is transient — never overwrite it here.
+        if case .maybeLater = behaviorBanner { return }
+
+        if BehaviorAnalytics.shouldShowEasedBack(reminders: reminders),
+           !settings.easedBackAcknowledged {
+            behaviorBanner = .easedBack
+            return
+        }
+        if let observation = BehaviorAnalytics.patternObservation(from: reminders) {
+            behaviorBanner = .pattern(text: observation)
+            return
+        }
+        if BehaviorAnalytics.wasYesterdayHeldBack(reminders: reminders) {
+            behaviorBanner = .quietHoldback
+            return
+        }
+        behaviorBanner = .none
+    }
+
+    func acknowledgeEasedBack() {
+        settings.easedBackAcknowledged = true
+        save()
+        recomputeBehaviorBanner()
+    }
+
+    func undoEasedBack() {
+        // Clear pause windows so nudges resume; engine can re-pause if needed.
+        for idx in reminders.indices { reminders[idx].pausedUntil = nil }
+        settings.easedBackAcknowledged = true
+        save()
+        Task {
+            scheduler.cancelAll()
+            await scheduler.scheduleAll(reminders, settings: settings)
+        }
+        recomputeBehaviorBanner()
     }
 
     // ── MARK: Nudge Check Timer ────────────────────────────────────
@@ -117,6 +174,7 @@ final class AppState: ObservableObject {
     }
 
     func toggleDone(_ id: UUID) {
+        var becameDone = false
         updateReminder(id) { r in
             let nowDone = !r.isDone
             r.isDone   = nowDone
@@ -125,6 +183,31 @@ final class AppState: ObservableObject {
                 let total = AdaptiveEngine.dailyNudgeCount(across: self.reminders)
                 AdaptiveEngine.recordInteraction(.completed, on: &r, settings: self.settings, dailyTotalSent: total)
                 self.scheduler.cancel(reminderId: id)
+                becameDone = true
+            }
+        }
+        if becameDone {
+            cascadeLinkedReminders(parentId: id)
+        }
+        recomputeBehaviorBanner()
+    }
+
+    // When a reminder is checked off, any reminder linked after it gets its
+    // nextNudgeAt pushed to (now + delayMin). Notification is rescheduled so
+    // the OS surfaces it even when the app is closed.
+    private func cascadeLinkedReminders(parentId: UUID) {
+        for idx in reminders.indices {
+            let r = reminders[idx]
+            guard r.type == .linked, r.link?.parentId == parentId, !r.isDone else { continue }
+            let delay = TimeInterval((r.link?.delayMin ?? 10) * 60)
+            reminders[idx].nextNudgeAt = Date.now.addingTimeInterval(delay)
+        }
+        save()
+        Task {
+            // Re-schedule any linked reminders whose time just changed.
+            for r in reminders where r.type == .linked && r.link?.parentId == parentId && !r.isDone {
+                scheduler.cancel(reminderId: r.id)
+                await scheduler.scheduleNudge(for: r, settings: settings)
             }
         }
     }
@@ -140,24 +223,39 @@ final class AppState: ObservableObject {
         analysis: TextAnalysis,
         frequency: FrequencyPreference,
         isRepeating: Bool,
-        dueDate: Date?
+        dueDate: Date?,
+        type: ReminderType = .standard,
+        trigger: TriggerInfo? = nil,
+        voice: VoiceInfo? = nil,
+        link: LinkInfo? = nil
     ) {
         var r = Reminder(
             text: text,
             category: analysis.category,
             frequency: frequency,
             timePreference: analysis.suggestedTimePreference,
-            isRepeating: isRepeating || analysis.isHabit,
+            isRepeating: isRepeating || (type == .standard && analysis.isHabit),
             dueDate: dueDate,
             hasGap: !reminders.isEmpty
         )
-        let total = AdaptiveEngine.dailyNudgeCount(across: reminders)
-        r.nextNudgeAt = AdaptiveEngine.nextNudgeDate(for: r, settings: settings, dailyTotalSent: total)
+        r.type    = type
+        r.trigger = trigger
+        r.voice   = voice
+        r.link    = link
+
+        // Standard reminders get a scheduled time. Trigger/voice/linked/oneoff
+        // are surfaced by other paths (events, parent completion, end-of-day).
+        if type == .standard {
+            let total = AdaptiveEngine.dailyNudgeCount(across: reminders)
+            r.nextNudgeAt = AdaptiveEngine.nextNudgeDate(for: r, settings: settings, dailyTotalSent: total)
+        }
 
         reminders.append(r)
         save()
 
-        Task { await scheduler.scheduleNudge(for: r, settings: settings) }
+        if type == .standard {
+            Task { await scheduler.scheduleNudge(for: r, settings: settings) }
+        }
         showAddSheet = false
     }
 
@@ -191,6 +289,17 @@ final class AppState: ObservableObject {
             recordInteraction(.skipped, for: nudge.reminderId)
         }
         activeNudge = nil
+        // Surface a brief receipt — same vocabulary as the design's
+        // "Maybe later — receipt" card. Auto-dismisses after ~12 seconds.
+        behaviorBanner = .maybeLater
+        maybeLaterTimer?.cancel()
+        maybeLaterTimer = Just(())
+            .delay(for: .seconds(12), scheduler: RunLoop.main)
+            .sink { [weak self] in
+                guard let self else { return }
+                if case .maybeLater = self.behaviorBanner { self.behaviorBanner = .none }
+                self.recomputeBehaviorBanner()
+            }
     }
 
     func nudgeDismiss() {
@@ -236,6 +345,30 @@ struct HomeView: View {
 
     private var allDone: Bool {
         !state.reminders.isEmpty && state.reminders.allSatisfy(\.isDone)
+    }
+
+    private var behaviorHasContent: Bool {
+        if case .none = state.behaviorBanner { return false }
+        return true
+    }
+
+    @ViewBuilder
+    private var behaviorBannerView: some View {
+        switch state.behaviorBanner {
+        case .none:
+            EmptyView()
+        case .pattern(let text):
+            PatternCard(text: text)
+        case .quietHoldback:
+            QuietHoldback()
+        case .easedBack:
+            EasedBackBanner(
+                onDismiss: { withAnimation(.easeOut(duration: 0.35)) { state.acknowledgeEasedBack() } },
+                onUndo:    { withAnimation(.easeOut(duration: 0.35)) { state.undoEasedBack()        } }
+            )
+        case .maybeLater:
+            MaybeLaterReceipt()
+        }
     }
 
     var body: some View {
@@ -286,7 +419,15 @@ struct HomeView: View {
                     .padding(.top, 14)
                     .frame(minHeight: 28)
 
-                    Spacer().frame(height: 52)
+                    Spacer().frame(height: 40)
+
+                    // Behaviour banner — pattern / quiet / eased-back / maybeLater.
+                    // One slot, one card. Renders nothing when there's no observation.
+                    behaviorBannerView
+                        .padding(.horizontal, 16)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+
+                    Spacer().frame(height: behaviorHasContent ? 16 : 0)
                     Eyebrow(text: "Today").padding(.horizontal, 32)
                     Spacer().frame(height: 24)
 
@@ -425,6 +566,13 @@ struct ReminderRowView: View {
                             .font(JGRFont.regular(11.5))
                             .foregroundStyle(Color.jgrT3)
                             .opacity(reminder.isDone ? 0.35 : 0.8)
+                    }
+
+                    // Type glyph — only for non-standard kinds, hairline + etiketsiz
+                    if reminder.type != .standard {
+                        TypeGlyph(type: reminder.type)
+                            .opacity(reminder.isDone ? 0.35 : 1)
+                            .padding(.leading, 2)
                     }
                 }
                 .padding(.vertical, 20)

@@ -77,28 +77,35 @@ struct ReminderKindSelector: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             ForEach(ReminderType.allCases, id: \.self) { kind in
-                Button { withAnimation(.easeInOut(duration: 0.25)) { value = kind } } label: {
-                    HStack(spacing: 14) {
-                        ZStack {
-                            TypeGlyph(type: kind,
-                                      color: value == kind ? Color.jgrT1 : Color.jgrT3,
-                                      opacity: value == kind ? 1 : 0.6)
-                        }
-                        .frame(width: 22)
-
-                        Text(kind.label)
-                            .font(value == kind ? JGRFont.medium(16) : JGRFont.regular(16))
-                            .foregroundStyle(value == kind ? Color.jgrT1 : Color.jgrT3)
-                            .tracking(-0.2)
-
-                        Text("· \(kind.hint)")
-                            .font(JGRFont.regular(13))
-                            .foregroundStyle(value == kind ? Color.jgrT3 : Color.jgrT4)
-                    }
-                }
-                .buttonStyle(.plain)
+                kindButton(for: kind)
             }
         }
+    }
+
+    private func kindButton(for kind: ReminderType) -> some View {
+        let active = value == kind
+        return Button {
+            withAnimation(.easeInOut(duration: 0.25)) { value = kind }
+        } label: {
+            HStack(spacing: 14) {
+                TypeGlyph(
+                    type: kind,
+                    color: active ? Color.jgrT1 : Color.jgrT3,
+                    opacity: active ? 1 : 0.6
+                )
+                .frame(width: 22)
+
+                Text(kind.label)
+                    .font(active ? JGRFont.medium(16) : JGRFont.regular(16))
+                    .foregroundStyle(active ? Color.jgrT1 : Color.jgrT3)
+                    .tracking(-0.2)
+
+                Text("· \(kind.hint)")
+                    .font(JGRFont.regular(13))
+                    .foregroundStyle(active ? Color.jgrT3 : Color.jgrT4)
+            }
+        }
+        .buttonStyle(.plain)
     }
 }
 
@@ -231,63 +238,15 @@ struct VoiceRecorderView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
-                Eyebrow(text: stateLabel)
-                Spacer()
-                Text(state == .idle ? "up to 5s" : String(format: "%.1fs", elapsed))
-                    .font(JGRFont.regular(12).monospacedDigit())
-                    .foregroundStyle(Color.jgrT3)
-                    .tracking(0.2)
-            }
+            header
 
             Spacer().frame(height: 14)
 
-            // Waveform area
-            HStack(alignment: .center, spacing: 2) {
-                if state == .idle && samples.isEmpty {
-                    Text("Tap record to leave a 5-second voice note. It plays back as the nudge.")
-                        .font(JGRFont.regular(13))
-                        .foregroundStyle(Color.jgrT3)
-                        .tracking(-0.05)
-                        .lineSpacing(2)
-                } else {
-                    ForEach(Array(displaySamples.enumerated()), id: \.offset) { _, v in
-                        Capsule()
-                            .fill(state == .recording ? Color.jgrT1 : Color.jgrT2)
-                            .frame(width: 2, height: max(2, CGFloat(v) * 38))
-                            .opacity(0.85)
-                    }
-                }
-            }
-            .frame(height: 44, alignment: .center)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            waveform
 
             Spacer().frame(height: 14)
 
-            HStack(spacing: 22) {
-                switch state {
-                case .idle:
-                    Button("● Record") { startRecording() }
-                        .font(JGRFont.medium(14))
-                        .foregroundStyle(Color.jgrT1)
-                case .recording:
-                    Button("Stop") { stopRecording() }
-                        .font(JGRFont.medium(14))
-                        .foregroundStyle(Color.jgrT1)
-                case .recorded:
-                    Button("▷ Play") { playBack() }
-                        .font(JGRFont.medium(14))
-                        .foregroundStyle(Color.jgrT1)
-                    Button("Re-record") { reset() }
-                        .font(JGRFont.regular(14))
-                        .foregroundStyle(Color.jgrT3)
-                case .playing:
-                    Text("Playing…")
-                        .font(JGRFont.regular(14))
-                        .foregroundStyle(Color.jgrT3)
-                }
-                Spacer()
-            }
+            controls
         }
         .padding(18)
         .background(Color.jgrSurface)
@@ -301,6 +260,67 @@ struct VoiceRecorderView: View {
             }
         }
         .onDisappear { ticker?.invalidate() }
+    }
+
+    private var header: some View {
+        HStack {
+            Eyebrow(text: stateLabel)
+            Spacer()
+            Text(state == .idle ? "up to 5s" : String(format: "%.1fs", elapsed))
+                .font(JGRFont.regular(12).monospacedDigit())
+                .foregroundStyle(Color.jgrT3)
+                .tracking(0.2)
+        }
+    }
+
+    @ViewBuilder
+    private var waveform: some View {
+        HStack(alignment: .center, spacing: 2) {
+            if state == .idle && samples.isEmpty {
+                Text("Tap record to leave a 5-second voice note. It plays back as the nudge.")
+                    .font(JGRFont.regular(13))
+                    .foregroundStyle(Color.jgrT3)
+                    .tracking(-0.05)
+                    .lineSpacing(2)
+            } else {
+                ForEach(Array(displaySamples.enumerated()), id: \.offset) { sample in
+                    Capsule()
+                        .fill(state == .recording ? Color.jgrT1 : Color.jgrT2)
+                        .frame(width: 2, height: max(2, CGFloat(sample.element) * 38))
+                        .opacity(0.85)
+                }
+            }
+        }
+        .frame(height: 44, alignment: .center)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    @ViewBuilder
+    private var controls: some View {
+        HStack(spacing: 22) {
+            switch state {
+            case .idle:
+                Button("● Record") { startRecording() }
+                    .font(JGRFont.medium(14))
+                    .foregroundStyle(Color.jgrT1)
+            case .recording:
+                Button("Stop") { stopRecording() }
+                    .font(JGRFont.medium(14))
+                    .foregroundStyle(Color.jgrT1)
+            case .recorded:
+                Button("▷ Play") { playBack() }
+                    .font(JGRFont.medium(14))
+                    .foregroundStyle(Color.jgrT1)
+                Button("Re-record") { reset() }
+                    .font(JGRFont.regular(14))
+                    .foregroundStyle(Color.jgrT3)
+            case .playing:
+                Text("Playing…")
+                    .font(JGRFont.regular(14))
+                    .foregroundStyle(Color.jgrT3)
+            }
+            Spacer()
+        }
     }
 
     private var stateLabel: String {
@@ -386,10 +406,8 @@ struct LinkedPicker: View {
                         .foregroundStyle(Color.jgrT3)
                         .lineSpacing(2)
                 } else {
-                    ForEach(parents, id: \.0) { (id, text) in
-                        ChipRow(active: value?.parentId == id, label: text) {
-                            value = LinkInfo(parentId: id, delayMin: value?.delayMin ?? 10)
-                        }
+                    ForEach(parents, id: \.0) { parent in
+                        parentRow(parent)
                     }
                 }
             }
@@ -400,26 +418,39 @@ struct LinkedPicker: View {
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 10) {
-                    ForEach(delays, id: \.0) { (mins, label) in
-                        let active = value?.delayMin == mins
-                        Button(label) {
-                            let parent = value?.parentId ?? parents.first?.0
-                            if let parent {
-                                value = LinkInfo(parentId: parent, delayMin: mins)
-                            }
-                        }
-                        .font(JGRFont.regular(13.5))
-                        .foregroundStyle(active ? Color.jgrT1 : Color.jgrT2)
-                        .tracking(-0.1)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(active ? Color.jgrSand : .clear)
-                        .overlay(Capsule().stroke(active ? Color.jgrT2 : Color.jgrT4, lineWidth: 0.75))
-                        .clipShape(Capsule())
+                    ForEach(delays, id: \.0) { delay in
+                        delayButton(delay)
                     }
                 }
             }
         }
+    }
+
+    private func parentRow(_ parent: (UUID, String)) -> some View {
+        ChipRow(active: value?.parentId == parent.0, label: parent.1) {
+            value = LinkInfo(parentId: parent.0, delayMin: value?.delayMin ?? 10)
+        }
+    }
+
+    private func delayButton(_ delay: (Int, String)) -> some View {
+        let minutes = delay.0
+        let label = delay.1
+        let active = value?.delayMin == minutes
+
+        return Button(label) {
+            let parent = value?.parentId ?? parents.first?.0
+            if let parent {
+                value = LinkInfo(parentId: parent, delayMin: minutes)
+            }
+        }
+        .font(JGRFont.regular(13.5))
+        .foregroundStyle(active ? Color.jgrT1 : Color.jgrT2)
+        .tracking(-0.1)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(active ? Color.jgrSand : .clear)
+        .overlay(Capsule().stroke(active ? Color.jgrT2 : Color.jgrT4, lineWidth: 0.75))
+        .clipShape(Capsule())
     }
 }
 

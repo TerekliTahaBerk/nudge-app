@@ -18,6 +18,7 @@ final class NotificationScheduler: NSObject, UNUserNotificationCenterDelegate {
     // Callback invoked on the main actor when user acts on a notification.
     var onNudgeDone:  ((UUID) -> Void)?
     var onNudgeLater: ((UUID) -> Void)?
+    var onNudgeOpened: ((UUID) -> Void)?
 
     private override init() {
         super.init()
@@ -26,6 +27,10 @@ final class NotificationScheduler: NSObject, UNUserNotificationCenterDelegate {
     }
 
     // ── MARK: Permission ──────────────────────────────────────────────────────
+
+    static func requestID(for reminderId: UUID) -> String {
+        "JGR_REMINDER_\(reminderId.uuidString)"
+    }
 
     func requestPermission() async -> Bool {
         do {
@@ -45,46 +50,63 @@ final class NotificationScheduler: NSObject, UNUserNotificationCenterDelegate {
 
     // ── MARK: Schedule a nudge ────────────────────────────────────────────────
 
-    func scheduleNudge(for reminder: Reminder, settings: AppSettings) async {
+    func scheduleNudge(for reminder: Reminder, settings: AppSettings, allReminders: [Reminder]? = nil) async {
         guard await isAuthorized else { return }
         guard !reminder.isDone else { return }
 
-        let totalSent = 0   // conservative: let the engine compute without cap for scheduling
-        let fireDate  = reminder.nextNudgeAt ?? AdaptiveEngine.nextNudgeDate(
-            for: reminder, settings: settings, dailyTotalSent: totalSent
+        let result = NotificationPlanner.plan(
+            for: reminder,
+            context: NudgeDecisionContext(allReminders: allReminders ?? [reminder], settings: settings)
         )
-        guard fireDate > .now else { return }
+        let fireDate = reminder.nextNudgeAt ?? result.plan?.nextFireDate
+        guard result.status == .scheduled || reminder.nextNudgeAt != nil else {
+            DebugLog.notification("Skipped \(reminder.id): \(result.status.rawValue) - \(result.explanation.text)")
+            return
+        }
+        guard let fireDate, fireDate > .now else {
+            DebugLog.notification("Skipped \(reminder.id): no future fire date")
+            return
+        }
 
         let content = UNMutableNotificationContent()
         content.title           = "A small nudge"
-        content.body            = AdaptiveEngine.nudgeBody(for: reminder)
+        content.body            = NotificationPlanner.calmCopy(for: reminder)
         content.sound           = .default
         content.categoryIdentifier = Self.categoryID
         content.userInfo        = ["reminderId": reminder.id.uuidString]
 
         let comps   = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: fireDate)
         let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
+        let requestID = Self.requestID(for: reminder.id)
         let request = UNNotificationRequest(
-            identifier: reminder.id.uuidString,
+            identifier: requestID,
             content: content,
             trigger: trigger
         )
 
-        try? await UNUserNotificationCenter.current().add(request)
+        cancel(reminderId: reminder.id)
+        do {
+            try await UNUserNotificationCenter.current().add(request)
+            DebugLog.notification("Scheduled \(requestID) at \(fireDate)")
+        } catch {
+            DebugLog.notification("Failed scheduling \(requestID): \(error.localizedDescription)")
+        }
     }
 
     // Convenience: schedule all non-done reminders.
     func scheduleAll(_ reminders: [Reminder], settings: AppSettings) async {
         for reminder in reminders where !reminder.isDone {
-            await scheduleNudge(for: reminder, settings: settings)
+            await scheduleNudge(for: reminder, settings: settings, allReminders: reminders)
         }
     }
 
     // ── MARK: Cancellation ────────────────────────────────────────────────────
 
     func cancel(reminderId: UUID) {
+        let requestID = Self.requestID(for: reminderId)
         UNUserNotificationCenter.current()
-            .removePendingNotificationRequests(withIdentifiers: [reminderId.uuidString])
+            .removePendingNotificationRequests(withIdentifiers: [requestID])
+        DebugLog.notification("Cancelled \(requestID)")
     }
 
     func cancelAll() {
@@ -122,7 +144,7 @@ final class NotificationScheduler: NSObject, UNUserNotificationCenterDelegate {
             case Self.laterActionID, UNNotificationDismissActionIdentifier:
                 onNudgeLater?(id)
             default:
-                break   // tapping the notification body opens the app
+                onNudgeOpened?(id)
             }
         }
     }
@@ -137,7 +159,7 @@ final class NotificationScheduler: NSObject, UNUserNotificationCenterDelegate {
         )
         let laterAction = UNNotificationAction(
             identifier: Self.laterActionID,
-            title: "Later",
+            title: "Maybe later",
             options: []
         )
         let category = UNNotificationCategory(

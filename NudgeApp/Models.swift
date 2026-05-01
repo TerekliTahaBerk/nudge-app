@@ -3,7 +3,7 @@ import Foundation
 // MARK: - Category
 
 enum ReminderCategory: String, Codable, CaseIterable, Hashable {
-    case body, move, mind, grow, none
+    case body, move, mind, grow, social, task, errand, health, home, work, none
 
     var displayName: String {
         switch self {
@@ -11,6 +11,12 @@ enum ReminderCategory: String, Codable, CaseIterable, Hashable {
         case .move: return "move"
         case .mind: return "mind"
         case .grow: return "grow"
+        case .social: return "social"
+        case .task: return "task"
+        case .errand: return "errand"
+        case .health: return "health"
+        case .home: return "home"
+        case .work: return "work"
         case .none: return ""
         }
     }
@@ -22,6 +28,12 @@ enum ReminderCategory: String, Codable, CaseIterable, Hashable {
         case .move:  return .daily   // movement → once a day
         case .mind:  return .daily   // mindfulness → once a day
         case .grow:  return .weekly  // learning/growth → few times a week
+        case .social: return .weekly
+        case .task: return .smart
+        case .errand: return .weekly
+        case .health: return .smart
+        case .home: return .weekly
+        case .work: return .smart
         case .none:  return .smart
         }
     }
@@ -33,6 +45,12 @@ enum ReminderCategory: String, Codable, CaseIterable, Hashable {
         case .move:  return [7, 12, 17]        // morning / lunch / after work
         case .mind:  return [8, 21]            // morning / evening
         case .grow:  return [9, 14]            // morning / afternoon
+        case .social: return [18, 19, 20]
+        case .task: return [10, 14, 17]
+        case .errand: return [11, 15, 18]
+        case .health: return [8, 12, 18]
+        case .home: return [18, 20]
+        case .work: return [9, 11, 14]
         case .none:  return [10, 14, 18]
         }
     }
@@ -114,12 +132,379 @@ enum ReminderType: String, Codable, CaseIterable {
     }
 }
 
+enum ReminderKind: String, Codable, Equatable {
+    case timeBased = "time_based"
+    case eventBased = "event_based"
+    case voice
+    case followOn = "follow_on"
+    case oneOff = "one_off"
+}
+
+enum SuggestedCadence: String, Codable, Equatable {
+    case smartGentle = "smart_gentle"
+    case daily
+    case fewTimesPerWeek = "few_times_per_week"
+    case occasional
+    case oneOff = "one_off"
+}
+
+enum ReminderIntent: String, Codable, Hashable {
+    case remind
+    case call
+    case send
+    case drink
+    case move
+    case household
+    case errand
+    case unknown
+}
+
+enum ReminderUrgency: String, Codable, Hashable {
+    case low, normal, high
+}
+
+enum RecurrenceExpectation: String, Codable, Hashable {
+    case oneOff = "one_off"
+    case recurring
+    case flexibleCadence = "flexible_cadence"
+    case eventDriven = "event_driven"
+}
+
+enum ReminderAmbiguityFlag: String, Codable, Hashable {
+    case missingLocationAlias = "missing_location_alias"
+    case unsupportedTrigger = "unsupported_trigger"
+    case lowTriggerConfidence = "low_trigger_confidence"
+    case calendarPermissionNeeded = "calendar_permission_needed"
+    case needsConfirmation = "needs_confirmation"
+}
+
+struct NudgeTimeWindow: Codable, Hashable {
+    var startHour: Int
+    var endHour: Int
+    var label: TimeWindowLabel
+
+    static func around(hour: Int, label: TimeWindowLabel) -> NudgeTimeWindow {
+        NudgeTimeWindow(startHour: max(0, hour - 1), endHour: min(23, hour + 1), label: label)
+    }
+
+    func nextDateAvoidingQuietHours(settings: AppSettings, from now: Date = .now) -> Date {
+        let cal = Calendar.current
+        let preferredHour = (startHour + endHour) / 2
+        let candidate = cal.date(bySettingHour: preferredHour, minute: 15, second: 0, of: now) ?? now
+        let future = candidate > now ? candidate : cal.date(byAdding: .day, value: 1, to: candidate) ?? candidate
+        let hour = cal.component(.hour, from: future)
+        if !AdaptiveEngine.isQuiet(hour: hour, settings: settings) {
+            return future
+        }
+        let tomorrow = cal.date(byAdding: .day, value: 1, to: now) ?? now
+        let fallbackHour = (settings.quietHoursEnd + 1) % 24
+        return cal.date(bySettingHour: fallbackHour, minute: 15, second: 0, of: tomorrow) ?? tomorrow
+    }
+}
+
 // Trigger payload — a "moment" (device event) or a "place" (geofence) or freeform.
 struct TriggerInfo: Codable, Hashable {
     enum Kind: String, Codable { case moment, place, custom }
     var kind: Kind
     var id: String?     // canonical id e.g. "open_laptop"
     var label: String   // human-readable
+}
+
+enum TriggerType: String, Codable, CaseIterable, Hashable {
+    case geofenceEnter = "geofence_enter"
+    case geofenceExit = "geofence_exit"
+    case deviceUnlock = "device_unlock"
+    case chargingStarted = "charging_started"
+    case bluetoothConnected = "bluetooth_connected"
+    case bluetoothDisconnected = "bluetooth_disconnected"
+    case carplayConnected = "carplay_connected"
+    case carplayDisconnected = "carplay_disconnected"
+    case wifiConnected = "wifi_connected"
+    case workoutEnded = "workout_ended"
+    case calendarEventEnded = "calendar_event_ended"
+    case morningFirstUnlock = "morning_first_unlock"
+    case customContext = "custom_context"
+    case unknownRequiresClarification = "unknown_requires_clarification"
+}
+
+enum PermissionKind: String, Codable, CaseIterable, Hashable {
+    case notifications
+    case location
+    case motionFitness = "motion_fitness"
+    case calendar
+    case bluetooth
+    case localNetwork = "local_network"
+    case microphone
+}
+
+struct TriggerCondition: Codable, Hashable, Equatable {
+    var type: TriggerType
+    var subject: String?
+    var locationAlias: String?
+    var metadata: [String: String]
+    var requiresPermission: [PermissionKind]
+    var minimumConfidence: Double
+    var cooldownSeconds: TimeInterval?
+
+    init(
+        type: TriggerType,
+        subject: String? = nil,
+        locationAlias: String? = nil,
+        metadata: [String: String] = [:],
+        requiresPermission: [PermissionKind] = [.notifications],
+        minimumConfidence: Double = 0.65,
+        cooldownSeconds: TimeInterval? = 3600
+    ) {
+        self.type = type
+        self.subject = subject
+        self.locationAlias = locationAlias
+        self.metadata = metadata
+        self.requiresPermission = requiresPermission
+        self.minimumConfidence = minimumConfidence
+        self.cooldownSeconds = cooldownSeconds
+    }
+}
+
+struct ReminderTrigger: Codable, Hashable, Equatable {
+    var id: UUID
+    var condition: TriggerCondition
+    var confidence: Double
+    var createdAt: Date
+    var lastFiredAt: Date?
+    var enabled: Bool
+
+    init(
+        id: UUID = UUID(),
+        condition: TriggerCondition,
+        confidence: Double,
+        createdAt: Date = .now,
+        lastFiredAt: Date? = nil,
+        enabled: Bool = true
+    ) {
+        self.id = id
+        self.condition = condition
+        self.confidence = confidence
+        self.createdAt = createdAt
+        self.lastFiredAt = lastFiredAt
+        self.enabled = enabled
+    }
+}
+
+struct ReminderSchedule: Codable, Hashable {
+    var cadence: SuggestedCadence
+    var preferredWindow: NudgeTimeWindow?
+    var dailyCap: Int
+    var lastPlannedAt: Date?
+    var confidence: Double? = nil
+    var lastExplanation: NudgeExplanation? = nil
+    var lastPlanStatus: NudgePlanStatus? = nil
+    var interpretationSummary: String? = nil
+    var fallbackSummary: String? = nil
+}
+
+enum NudgePlanStatus: String, Codable, Hashable {
+    case scheduled
+    case waitingForTrigger
+    case needsClarification
+    case missingPermission
+    case missingLocationAlias
+    case unsupported
+    case dailyCapReached
+    case quietHours
+    case clustered
+    case paused
+}
+
+enum NudgeExplanationCode: String, Codable, Hashable {
+    case matchedMorningWaterPattern
+    case matchedMorningHabit
+    case selectedSocialEvening
+    case categoryDefaultWindow
+    case learnedRhythmWindow
+    case parsedTimeHint
+    case quietHoursDelayed
+    case dailyCapReached
+    case notificationClusterPrevented
+    case waitingForTrigger
+    case missingPermission
+    case missingLocationAlias
+    case unsupportedTrigger
+    case needsClarification
+    case recentMistimedEasedBack
+    case lowConfidenceTriggerFallback
+    case triggeredByEvent
+    case maybeLaterDelayed
+    case ignoredWindowReduced
+    case openedPositiveSignal
+}
+
+struct NudgeExplanation: Codable, Hashable {
+    var code: NudgeExplanationCode
+    var text: String
+}
+
+struct NudgePlan: Codable, Hashable {
+    var reminderId: UUID
+    var nextFireDate: Date
+    var window: NudgeTimeWindow
+    var confidence: Double
+    var explanation: NudgeExplanation
+}
+
+struct NudgePlanResult: Codable, Hashable {
+    var status: NudgePlanStatus
+    var plan: NudgePlan?
+    var explanation: NudgeExplanation
+    var confidence: Double
+
+    var isScheduled: Bool { status == .scheduled && plan != nil }
+}
+
+struct NudgeDecisionContext {
+    var allReminders: [Reminder]
+    var settings: AppSettings
+    var now: Date
+    var triggeredBy: TriggerEvent?
+
+    init(allReminders: [Reminder], settings: AppSettings, now: Date = .now, triggeredBy: TriggerEvent? = nil) {
+        self.allReminders = allReminders
+        self.settings = settings
+        self.now = now
+        self.triggeredBy = triggeredBy
+    }
+}
+
+struct TriggerEvent: Codable, Hashable {
+    var type: TriggerType
+    var subject: String?
+    var confidence: Double
+    var createdAt: Date
+
+    init(type: TriggerType, subject: String? = nil, confidence: Double = 1.0, createdAt: Date = .now) {
+        self.type = type
+        self.subject = subject
+        self.confidence = confidence
+        self.createdAt = createdAt
+    }
+}
+
+struct TriggerEventLog: Codable, Identifiable, Hashable {
+    let id: UUID
+    var triggerType: TriggerType
+    var reminderId: UUID?
+    var confidence: Double
+    var createdAt: Date
+    var fired: Bool
+
+    init(id: UUID = UUID(), triggerType: TriggerType, reminderId: UUID? = nil, confidence: Double, createdAt: Date = .now, fired: Bool = false) {
+        self.id = id
+        self.triggerType = triggerType
+        self.reminderId = reminderId
+        self.confidence = confidence
+        self.createdAt = createdAt
+        self.fired = fired
+    }
+}
+
+struct NudgeHistory: Codable, Identifiable, Hashable {
+    let id: UUID
+    var reminderId: UUID
+    var plannedAt: Date
+    var deliveredAt: Date?
+    var action: UserFeedbackAction?
+
+    init(id: UUID = UUID(), reminderId: UUID, plannedAt: Date, deliveredAt: Date? = nil, action: UserFeedbackAction? = nil) {
+        self.id = id
+        self.reminderId = reminderId
+        self.plannedAt = plannedAt
+        self.deliveredAt = deliveredAt
+        self.action = action
+    }
+}
+
+enum UserFeedbackAction: String, Codable, Hashable {
+    case done
+    case maybeLater = "maybe_later"
+    case ignored
+    case dismissed
+    case opened
+}
+
+struct UserFeedback: Codable, Identifiable, Hashable {
+    let id: UUID
+    var reminderId: UUID
+    var action: UserFeedbackAction
+    var createdAt: Date
+
+    init(id: UUID = UUID(), reminderId: UUID, action: UserFeedbackAction, createdAt: Date = .now) {
+        self.id = id
+        self.reminderId = reminderId
+        self.action = action
+        self.createdAt = createdAt
+    }
+}
+
+struct UserRhythmProfile: Codable, Hashable {
+    var preferredHoursByCategory: [String: [Int: Double]] = [:]
+    var feedbackCountsByCategory: [String: [String: Int]] = [:]
+    var mistimingStreakByCategory: [String: Int] = [:]
+    var successStreakByCategory: [String: Int] = [:]
+    var confidenceByCategory: [String: Double] = [:]
+    var lastPatternNoticeAt: Date?
+    var updatedAt: Date = .now
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.preferredHoursByCategory = try c.decodeIfPresent([String: [Int: Double]].self, forKey: .preferredHoursByCategory) ?? [:]
+        self.feedbackCountsByCategory = try c.decodeIfPresent([String: [String: Int]].self, forKey: .feedbackCountsByCategory) ?? [:]
+        self.mistimingStreakByCategory = try c.decodeIfPresent([String: Int].self, forKey: .mistimingStreakByCategory) ?? [:]
+        self.successStreakByCategory = try c.decodeIfPresent([String: Int].self, forKey: .successStreakByCategory) ?? [:]
+        self.confidenceByCategory = try c.decodeIfPresent([String: Double].self, forKey: .confidenceByCategory) ?? [:]
+        self.lastPatternNoticeAt = try c.decodeIfPresent(Date.self, forKey: .lastPatternNoticeAt)
+        self.updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? .now
+    }
+}
+
+struct QuietHours: Codable, Hashable {
+    var startHour: Int
+    var endHour: Int
+}
+
+struct LocationAlias: Codable, Identifiable, Hashable {
+    let id: UUID
+    var name: String
+    var latitude: Double?
+    var longitude: Double?
+    var radiusMeters: Double
+
+    init(id: UUID = UUID(), name: String, latitude: Double? = nil, longitude: Double? = nil, radiusMeters: Double = 150) {
+        self.id = id
+        self.name = name
+        self.latitude = latitude
+        self.longitude = longitude
+        self.radiusMeters = radiusMeters
+    }
+}
+
+enum PermissionStatus: String, Codable, Hashable {
+    case unknown
+    case granted
+    case denied
+    case unavailable
+}
+
+struct PermissionState: Codable, Hashable {
+    var permission: PermissionKind
+    var status: PermissionStatus
+    var updatedAt: Date
+
+    init(permission: PermissionKind, status: PermissionStatus = .unknown, updatedAt: Date = .now) {
+        self.permission = permission
+        self.status = status
+        self.updatedAt = updatedAt
+    }
 }
 
 // Voice payload — a tiny recording. We store duration + sampled waveform
@@ -180,6 +565,10 @@ struct Reminder: Identifiable, Codable {
     var voice: VoiceInfo?
     var link: LinkInfo?
 
+    var kind: ReminderKind = .timeBased
+    var schedule: ReminderSchedule?
+    var triggerDefinition: ReminderTrigger?
+
     let createdAt: Date
 
     // Adaptive score — read-only, always fresh from interactions.
@@ -221,6 +610,9 @@ struct Reminder: Identifiable, Codable {
         self.trigger        = nil
         self.voice          = nil
         self.link           = nil
+        self.kind           = .timeBased
+        self.schedule       = nil
+        self.triggerDefinition = nil
         self.createdAt      = .now
     }
 
@@ -245,6 +637,10 @@ struct Reminder: Identifiable, Codable {
         self.trigger        = try c.decodeIfPresent(TriggerInfo.self, forKey: .trigger)
         self.voice          = try c.decodeIfPresent(VoiceInfo.self, forKey: .voice)
         self.link           = try c.decodeIfPresent(LinkInfo.self, forKey: .link)
+        self.kind           = try c.decodeIfPresent(ReminderKind.self, forKey: .kind)
+            ?? ReminderKind(fromLegacyType: self.type)
+        self.schedule       = try c.decodeIfPresent(ReminderSchedule.self, forKey: .schedule)
+        self.triggerDefinition = try c.decodeIfPresent(ReminderTrigger.self, forKey: .triggerDefinition)
         self.createdAt      = try c.decode(Date.self, forKey: .createdAt)
     }
 
@@ -257,6 +653,18 @@ struct Reminder: Identifiable, Codable {
             Reminder(text: "Step outside for a moment",   category: .move, frequency: .daily, isRepeating: false, hasGap: true),
             Reminder(text: "Breathe deeply for a minute", category: .mind, frequency: .daily, isRepeating: true,  hasGap: false),
         ]
+    }
+}
+
+private extension ReminderKind {
+    init(fromLegacyType type: ReminderType) {
+        switch type {
+        case .standard: self = .timeBased
+        case .trigger: self = .eventBased
+        case .voice: self = .voice
+        case .linked: self = .followOn
+        case .oneoff: self = .oneOff
+        }
     }
 }
 
@@ -286,6 +694,15 @@ struct AppSettings: Codable {
     // Set true after the user dismisses the eased-back banner; cleared the
     // next time the engine eases back again.
     var easedBackAcknowledged: Bool    = false
+    var userRhythmProfile: UserRhythmProfile = UserRhythmProfile()
+    var quietHours: QuietHours = QuietHours(startHour: 23, endHour: 8)
+    var locationAliases: [LocationAlias] = []
+    var permissionStates: [PermissionState] = []
+    var triggerEventLog: [TriggerEventLog] = []
+    var nudgeHistory: [NudgeHistory] = []
+    var userFeedback: [UserFeedback] = []
+    var patternNoticesShown: [String] = []
+    var lastMorningFirstUnlockDate: String?
 
     init() {}
 
@@ -299,8 +716,29 @@ struct AppSettings: Codable {
         self.quietHoursEnd         = try c.decodeIfPresent(Int.self, forKey: .quietHoursEnd) ?? 8
         self.receptivityEnabled    = try c.decodeIfPresent(Bool.self, forKey: .receptivityEnabled) ?? true
         self.easedBackAcknowledged = try c.decodeIfPresent(Bool.self, forKey: .easedBackAcknowledged) ?? false
+        self.userRhythmProfile     = try c.decodeIfPresent(UserRhythmProfile.self, forKey: .userRhythmProfile) ?? UserRhythmProfile()
+        self.quietHours            = try c.decodeIfPresent(QuietHours.self, forKey: .quietHours) ?? QuietHours(startHour: self.quietHoursStart, endHour: self.quietHoursEnd)
+        self.locationAliases       = try c.decodeIfPresent([LocationAlias].self, forKey: .locationAliases) ?? []
+        self.permissionStates      = try c.decodeIfPresent([PermissionState].self, forKey: .permissionStates) ?? []
+        self.triggerEventLog       = try c.decodeIfPresent([TriggerEventLog].self, forKey: .triggerEventLog) ?? []
+        self.nudgeHistory          = try c.decodeIfPresent([NudgeHistory].self, forKey: .nudgeHistory) ?? []
+        self.userFeedback          = try c.decodeIfPresent([UserFeedback].self, forKey: .userFeedback) ?? []
+        self.patternNoticesShown   = try c.decodeIfPresent([String].self, forKey: .patternNoticesShown) ?? []
+        self.lastMorningFirstUnlockDate = try c.decodeIfPresent(String.self, forKey: .lastMorningFirstUnlockDate)
     }
 }
+
+#if DEBUG
+struct ReminderDebugSummary: Hashable {
+    var kind: ReminderKind
+    var category: ReminderCategory
+    var trigger: TriggerCondition?
+    var nextPlannedNudge: Date?
+    var confidence: Double
+    var status: NudgePlanStatus
+    var explanation: NudgeExplanation
+}
+#endif
 
 // MARK: - Text Analysis Result
 

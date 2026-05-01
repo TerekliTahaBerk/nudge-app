@@ -10,6 +10,9 @@ struct AddReminderView: View {
     @State private var isRepeating  = false
     @State private var dueDate: Date?
     @State private var showCalendar = false
+    @State private var analysisTask: Task<Void, Never>?
+    @State private var userPickedFrequency = false
+    @State private var parsedIntent: ParsedReminderIntent?
 
     // Reminder kind + payloads
     @State private var kind: ReminderType = .standard
@@ -25,7 +28,10 @@ struct AddReminderView: View {
 
     private var catColor: Color { Color.categoryColor(analysis.category) }
     private var hasCat: Bool    { analysis.category != .none }
-    private var hasText: Bool   { !text.trimmingCharacters(in: .whitespaces).isEmpty }
+    private var inputValidation: ReminderInputValidator.Result {
+        ReminderInputValidator.validate(text, allowsEmpty: kind == .voice)
+    }
+    private var hasText: Bool   { ReminderInputValidator.validate(text).isValid }
 
     // Saveability rules differ by kind. Voice doesn't need text; trigger needs both.
     private var ready: Bool {
@@ -85,22 +91,7 @@ struct AddReminderView: View {
                                     .lineLimit(1...4)
                                     .focused($textFocused)
                                     .onChange(of: text) { _, newValue in
-                                        Task.detached(priority: .userInitiated) {
-                                            let result = TextAnalyzer.analyze(newValue)
-                                            await MainActor.run {
-                                                withAnimation(.easeInOut(duration: 0.3)) {
-                                                    self.analysis = result
-                                                }
-                                                // Auto-suggest frequency if still on default
-                                                if self.frequency == .smart {
-                                                    self.frequency = result.suggestedFrequency
-                                                }
-                                                // Auto-suggest repeat for habits
-                                                if result.isHabit && !self.isRepeating {
-                                                    self.isRepeating = true
-                                                }
-                                            }
-                                        }
+                                        handleTextChange(newValue)
                                     }
 
                                 // Inferred-category dot
@@ -186,6 +177,7 @@ struct AddReminderView: View {
                             VStack(alignment: .leading, spacing: 18) {
                                 ForEach(FrequencyPreference.allCases, id: \.self) { opt in
                                     Button {
+                                        userPickedFrequency = true
                                         withAnimation(.easeInOut(duration: 0.25)) { frequency = opt }
                                     } label: {
                                         HStack(spacing: 0) {
@@ -255,14 +247,23 @@ struct AddReminderView: View {
             }
         }
         .onAppear { textFocused = true }
+        .onDisappear { analysisTask?.cancel() }
     }
 
     private func save() {
         guard ready else { return }
-        let trimmed = text.trimmingCharacters(in: .whitespaces)
+        let validated = ReminderInputValidator.validate(text, allowsEmpty: kind == .voice)
+        let trimmed = validated.sanitizedText.trimmingCharacters(in: .whitespacesAndNewlines)
         // For voice with no label, use a soft fallback so it's identifiable in the list.
         let finalText = trimmed.isEmpty ? "Voice note" : trimmed
-        let finalAnalysis = TextAnalyzer.analyze(finalText)
+        let parsedIntent = self.parsedIntent ?? ReminderUnderstandingEngine.parse(finalText, history: state.reminders)
+        let finalAnalysis = TextAnalysis(
+            category: parsedIntent.category,
+            suggestedFrequency: frequency,
+            suggestedTimePreference: parsedIntent.timeWindow?.label.timePreference ?? TextAnalyzer.analyze(finalText).suggestedTimePreference,
+            isHabit: parsedIntent.suggestedCadence == .daily || parsedIntent.suggestedCadence == .smartGentle,
+            confidence: parsedIntent.confidence
+        )
 
         // For non-standard kinds, frequency/date are not user-driven —
         // pin them to sensible defaults so the model and engine stay coherent.
@@ -277,10 +278,65 @@ struct AddReminderView: View {
             isRepeating: resolvedRepeating,
             dueDate: resolvedDate,
             type: kind,
+            parsedIntent: parsedIntent,
             trigger: trigger,
             voice: voice,
             link: link
         )
+    }
+
+    private func handleTextChange(_ newValue: String) {
+        let sanitized = ReminderInputValidator.sanitize(newValue)
+        if sanitized != newValue {
+            text = sanitized
+            return
+        }
+
+        analysisTask?.cancel()
+        analysisTask = Task {
+            try? await Task.sleep(nanoseconds: 160_000_000)
+            guard !Task.isCancelled else { return }
+
+            let result = TextAnalyzer.analyze(sanitized)
+            let parsed = ReminderUnderstandingEngine.parse(sanitized, history: state.reminders)
+            guard !Task.isCancelled else { return }
+
+            withAnimation(.easeInOut(duration: 0.2)) {
+                analysis = result
+                parsedIntent = parsed
+            }
+
+            if !userPickedFrequency && frequency == .smart {
+                frequency = result.suggestedFrequency
+            }
+            if result.isHabit && !isRepeating && kind == .standard {
+                isRepeating = true
+            }
+            if parsed.kind == .eventBased && kind == .standard, let parsedTrigger = parsed.trigger {
+                kind = .trigger
+                trigger = TriggerInfo(
+                    kind: parsedTrigger.condition.type.isGeofence ? .place : .moment,
+                    id: parsedTrigger.condition.subject,
+                    label: parsedTrigger.condition.subject ?? parsedTrigger.condition.type.rawValue
+                )
+            }
+        }
+    }
+}
+
+private extension TriggerType {
+    var isGeofence: Bool {
+        self == .geofenceEnter || self == .geofenceExit
+    }
+}
+
+private extension TimeWindowLabel {
+    var timePreference: TimePreference {
+        switch self {
+        case .earlyMorning, .morning, .lateMorning: return .morning
+        case .evening, .night: return .evening
+        case .afternoon: return .flexible
+        }
     }
 }
 

@@ -22,11 +22,27 @@
 		AA11BB22CC33DD440000004C /* ReminderKindsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD440000002C /* ReminderKindsView.swift */; };
 		AA11BB22CC33DD440000004D /* BehaviorViews.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD440000002D /* BehaviorViews.swift */; };
 		AA11BB22CC33DD440000004E /* BehaviorAnalytics.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD440000002E /* BehaviorAnalytics.swift */; };
+		AA11BB22CC33DD440000004F /* ReminderInputValidator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD440000002F /* ReminderInputValidator.swift */; };
+		AA11BB22CC33DD4400000050 /* IntelligentSchedulingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD4400000030 /* IntelligentSchedulingEngine.swift */; };
+		AA11BB22CC33DD4400000051 /* TriggerEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD4400000031 /* TriggerEngine.swift */; };
+		AA11BB22CC33DD4400000052 /* ReminderEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD4400000032 /* ReminderEngineTests.swift */; };
+		AA11BB22CC33DD4400000053 /* DebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD4400000033 /* DebugLog.swift */; };
 		AA11BB22CC33DD4400000061 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD4400000060 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
+/* Begin PBXContainerItemProxy section */
+		AA11BB22CC33DD4400000090 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA11BB22CC33DD4400000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA11BB22CC33DD4400000003;
+			remoteInfo = NudgeApp;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		AA11BB22CC33DD4400000011 /* NudgeApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NudgeApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA11BB22CC33DD4400000012 /* NudgeAppTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NudgeAppTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		AA11BB22CC33DD4400000020 /* NudgeApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NudgeApp.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD4400000021 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD4400000022 /* DesignSystem.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DesignSystem.swift; sourceTree = "<group>"; };
@@ -42,12 +58,24 @@
 		AA11BB22CC33DD440000002C /* ReminderKindsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReminderKindsView.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD440000002D /* BehaviorViews.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BehaviorViews.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD440000002E /* BehaviorAnalytics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = BehaviorAnalytics.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD440000002F /* ReminderInputValidator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReminderInputValidator.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD4400000030 /* IntelligentSchedulingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IntelligentSchedulingEngine.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD4400000031 /* TriggerEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TriggerEngine.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD4400000032 /* ReminderEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReminderEngineTests.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD4400000033 /* DebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLog.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD4400000060 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AA11BB22CC33DD4400000070 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
 		AA11BB22CC33DD4400000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA11BB22CC33DD4400000094 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
@@ -61,6 +89,7 @@
 			isa = PBXGroup;
 			children = (
 				AA11BB22CC33DD4400000010 /* NudgeApp */,
+				AA11BB22CC33DD4400000013 /* NudgeAppTests */,
 				AA11BB22CC33DD4400000009 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -69,6 +98,7 @@
 			isa = PBXGroup;
 			children = (
 				AA11BB22CC33DD4400000011 /* NudgeApp.app */,
+				AA11BB22CC33DD4400000012 /* NudgeAppTests.xctest */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -91,10 +121,22 @@
 				AA11BB22CC33DD440000002C /* ReminderKindsView.swift */,
 				AA11BB22CC33DD440000002D /* BehaviorViews.swift */,
 				AA11BB22CC33DD440000002E /* BehaviorAnalytics.swift */,
+				AA11BB22CC33DD440000002F /* ReminderInputValidator.swift */,
+				AA11BB22CC33DD4400000030 /* IntelligentSchedulingEngine.swift */,
+				AA11BB22CC33DD4400000031 /* TriggerEngine.swift */,
+				AA11BB22CC33DD4400000033 /* DebugLog.swift */,
 				AA11BB22CC33DD4400000060 /* Assets.xcassets */,
 				AA11BB22CC33DD4400000070 /* Info.plist */,
 			);
 			path = NudgeApp;
+			sourceTree = "<group>";
+		};
+		AA11BB22CC33DD4400000013 /* NudgeAppTests */ = {
+			isa = PBXGroup;
+			children = (
+				AA11BB22CC33DD4400000032 /* ReminderEngineTests.swift */,
+			);
+			path = NudgeAppTests;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -117,6 +159,24 @@
 			productReference = AA11BB22CC33DD4400000011 /* NudgeApp.app */;
 			productType = "com.apple.product-type.application";
 		};
+		AA11BB22CC33DD4400000091 /* NudgeAppTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA11BB22CC33DD4400000097 /* Build configuration list for PBXNativeTarget "NudgeAppTests" */;
+			buildPhases = (
+				AA11BB22CC33DD4400000092 /* Sources */,
+				AA11BB22CC33DD4400000094 /* Frameworks */,
+				AA11BB22CC33DD4400000095 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				AA11BB22CC33DD4400000096 /* PBXTargetDependency */,
+			);
+			name = NudgeAppTests;
+			productName = NudgeAppTests;
+			productReference = AA11BB22CC33DD4400000012 /* NudgeAppTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -129,6 +189,10 @@
 				TargetAttributes = {
 					AA11BB22CC33DD4400000003 = {
 						CreatedOnToolsVersion = 15.3;
+					};
+					AA11BB22CC33DD4400000091 = {
+						CreatedOnToolsVersion = 15.3;
+						TestTargetID = AA11BB22CC33DD4400000003;
 					};
 				};
 			};
@@ -146,6 +210,7 @@
 			projectRoot = "";
 			targets = (
 				AA11BB22CC33DD4400000003 /* NudgeApp */,
+				AA11BB22CC33DD4400000091 /* NudgeAppTests */,
 			);
 		};
 /* End PBXProject section */
@@ -156,6 +221,13 @@
 			buildActionMask = 2147483647;
 			files = (
 				AA11BB22CC33DD4400000061 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA11BB22CC33DD4400000095 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -181,19 +253,42 @@
 				AA11BB22CC33DD440000004C /* ReminderKindsView.swift in Sources */,
 				AA11BB22CC33DD440000004D /* BehaviorViews.swift in Sources */,
 				AA11BB22CC33DD440000004E /* BehaviorAnalytics.swift in Sources */,
+				AA11BB22CC33DD440000004F /* ReminderInputValidator.swift in Sources */,
+				AA11BB22CC33DD4400000050 /* IntelligentSchedulingEngine.swift in Sources */,
+				AA11BB22CC33DD4400000051 /* TriggerEngine.swift in Sources */,
+				AA11BB22CC33DD4400000053 /* DebugLog.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AA11BB22CC33DD4400000092 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA11BB22CC33DD4400000052 /* ReminderEngineTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
 
+/* Begin PBXTargetDependency section */
+		AA11BB22CC33DD4400000096 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA11BB22CC33DD4400000003 /* NudgeApp */;
+			targetProxy = AA11BB22CC33DD4400000090 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
 /* Begin XCBuildConfiguration section */
-		AA11BB22CC33DD4400000011A /* Debug — Target */ = {
+		AA11BB22CC33DD4400000011A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				DEVELOPMENT_TEAM = G2FJ8944LT;
+				ENABLE_TESTABILITY = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = NudgeApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -202,27 +297,29 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.gentlereminders.nudge";
-				PRODUCT_NAME = "$(TARGET_NAME)";
-				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
-				TARGETED_DEVICE_FAMILY = 1;
-				DEBUG_INFORMATION_FORMAT = dwarf;
-				ENABLE_TESTABILITY = YES;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gentlereminders.nudge;
+				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
 			};
 			name = Debug;
 		};
-		AA11BB22CC33DD4400000012A /* Release — Target */ = {
+		AA11BB22CC33DD4400000012A /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
 				CURRENT_PROJECT_VERSION = 1;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				DEVELOPMENT_TEAM = G2FJ8944LT;
+				ENABLE_NS_ASSERTIONS = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = NudgeApp/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
@@ -231,21 +328,18 @@
 					"@executable_path/Frameworks",
 				);
 				MARKETING_VERSION = 1.0;
-				PRODUCT_BUNDLE_IDENTIFIER = "com.gentlereminders.nudge";
+				MTL_ENABLE_DEBUG_INFO = NO;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gentlereminders.nudge;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Owholemodule";
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
-				COPY_PHASE_STRIP = NO;
-				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
-				ENABLE_NS_ASSERTIONS = NO;
-				MTL_ENABLE_DEBUG_INFO = NO;
-				SWIFT_OPTIMIZATION_LEVEL = "-Owholemodule";
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
 		};
-		AA11BB22CC33DD4400000013A /* Debug — Project */ = {
+		AA11BB22CC33DD4400000013A /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -305,7 +399,7 @@
 			};
 			name = Debug;
 		};
-		AA11BB22CC33DD4400000014A /* Release — Project */ = {
+		AA11BB22CC33DD4400000014A /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
@@ -358,6 +452,38 @@
 			};
 			name = Release;
 		};
+		AA11BB22CC33DD4400000098 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = G2FJ8944LT;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gentlereminders.nudge.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NudgeApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NudgeApp";
+			};
+			name = Debug;
+		};
+		AA11BB22CC33DD4400000099 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				DEVELOPMENT_TEAM = G2FJ8944LT;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.gentlereminders.nudge.tests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/NudgeApp.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/NudgeApp";
+			};
+			name = Release;
+		};
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
@@ -379,8 +505,16 @@
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;
 		};
+		AA11BB22CC33DD4400000097 /* Build configuration list for PBXNativeTarget "NudgeAppTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA11BB22CC33DD4400000098 /* Debug */,
+				AA11BB22CC33DD4400000099 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
 /* End XCConfigurationList section */
-
 	};
 	rootObject = AA11BB22CC33DD4400000001 /* Project object */;
 }

@@ -78,7 +78,7 @@ enum TextAnalyzer {
             // Turkish
             "su": 1.0, "iç": 0.8, "içmek": 0.9, "ye": 0.8, "yemek": 0.8, "kahvaltı": 0.9,
             "uyku": 1.0, "uyu": 0.9, "dinlen": 0.9, "mola": 0.8,
-            "ilaç": 1.0, "vitamin": 1.0, "hap": 1.0,
+            "ilaç": 1.0, "hap": 1.0,
         ],
         .move: [
             // English
@@ -90,7 +90,7 @@ enum TextAnalyzer {
             // Turkish
             "yürü": 1.0, "yürümek": 1.0, "koş": 1.0, "koşmak": 1.0,
             "egzersiz": 1.0, "spor": 1.0, "dışarı": 0.9, "adım": 0.7,
-            "yoga": 1.0, "bisiklet": 0.9, "yüz": 0.9, "yüzmek": 0.9,
+            "bisiklet": 0.9, "yüz": 0.9, "yüzmek": 0.9,
         ],
         .mind: [
             // English
@@ -116,7 +116,7 @@ enum TextAnalyzer {
             // Turkish
             "öğren": 1.0, "öğrenmek": 1.0, "çalış": 0.9, "pratik": 0.9,
             "ara": 0.8, "aramak": 0.8, "mesaj": 0.7,
-            "plan": 0.9, "hazırlan": 0.8,
+            "hazırlan": 0.8,
             "ders": 0.9, "dil": 0.9,
         ],
     ]

@@ -46,11 +46,15 @@ final class AppState: ObservableObject {
 
         self.settings  = savedSettings
         self.reminders = savedReminders.isEmpty ? Reminder.seedReminders() : savedReminders
+        reconcileLoadedReminderPlans()
 
         // Wire notification callbacks
         scheduler.onNudgeDone  = { [weak self] id in self?.markDone(id) }
         scheduler.onNudgeLater = { [weak self] id in
             self?.recordInteraction(.skipped, for: id)
+        }
+        scheduler.onNudgeOpened = { [weak self] id in
+            self?.recordNotificationOpened(id)
         }
 
         // Start background services after init
@@ -60,12 +64,14 @@ final class AppState: ObservableObject {
     private func postInitSetup() async {
         // Request notification permission if not yet decided
         if await !scheduler.isAuthorized {
-            await scheduler.requestPermission()
+            _ = await scheduler.requestPermission()
         }
+        await refreshNotificationPermissionState()
         startNudgeTimer()
         scheduleMidnightReset()
         // Schedule all pending notifications
         await scheduler.scheduleAll(reminders, settings: settings)
+        save()
         // Pick the first behaviour observation worth surfacing.
         await MainActor.run { recomputeBehaviorBanner() }
     }
@@ -125,20 +131,29 @@ final class AppState: ObservableObject {
         NotificationCenter.default.addObserver(
             forName: UIApplication.didBecomeActiveNotification,
             object: nil, queue: .main
-        ) { [weak self] _ in self?.checkForDueNudges() }
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.recordMorningFirstUnlockIfNeeded()
+                self?.checkForDueNudges()
+            }
+        }
     }
 
     func checkForDueNudges() {
         guard activeNudge == nil else { return }   // already showing one
-        let total = AdaptiveEngine.dailyNudgeCount(across: reminders)
 
         for reminder in reminders {
-            guard AdaptiveEngine.shouldNudge(reminder, settings: settings, dailyTotalSent: total) else { continue }
-            let body = AdaptiveEngine.nudgeBody(for: reminder)
+            guard let due = reminder.nextNudgeAt, due <= .now else { continue }
+            let result = NotificationPlanner.plan(
+                for: reminder,
+                context: NudgeDecisionContext(allReminders: reminders, settings: settings)
+            )
+            guard result.status == .scheduled else { continue }
+            let body = NotificationPlanner.calmCopy(for: reminder)
             activeNudge = ActiveNudge(reminderId: reminder.id, body: body, category: reminder.category)
             // Push next nudge time forward so this doesn't re-fire immediately
             updateReminder(reminder.id) { r in
-                r.nextNudgeAt = AdaptiveEngine.nextNudgeDate(for: r, settings: self.settings, dailyTotalSent: total + 1)
+                self.applyPlanResult(result, to: &r)
             }
             break
         }
@@ -180,10 +195,16 @@ final class AppState: ObservableObject {
             r.isDone   = nowDone
             r.doneDate = nowDone ? todayISO() : nil
             if nowDone {
-                let total = AdaptiveEngine.dailyNudgeCount(across: self.reminders)
-                AdaptiveEngine.recordInteraction(.completed, on: &r, settings: self.settings, dailyTotalSent: total)
+                self.recordFeedback(.done, on: &r)
                 self.scheduler.cancel(reminderId: id)
                 becameDone = true
+            } else {
+                r.nextNudgeAt = nil
+                let result = NotificationPlanner.plan(
+                    for: r,
+                    context: NudgeDecisionContext(allReminders: self.reminders, settings: self.settings)
+                )
+                self.applyPlanResult(result, to: &r)
             }
         }
         if becameDone {
@@ -207,7 +228,7 @@ final class AppState: ObservableObject {
             // Re-schedule any linked reminders whose time just changed.
             for r in reminders where r.type == .linked && r.link?.parentId == parentId && !r.isDone {
                 scheduler.cancel(reminderId: r.id)
-                await scheduler.scheduleNudge(for: r, settings: settings)
+                await scheduler.scheduleNudge(for: r, settings: settings, allReminders: reminders)
             }
         }
     }
@@ -215,6 +236,9 @@ final class AppState: ObservableObject {
     func removeReminder(_ id: UUID) {
         scheduler.cancel(reminderId: id)
         reminders.removeAll { $0.id == id }
+        settings.triggerEventLog.removeAll { $0.reminderId == id }
+        settings.nudgeHistory.removeAll { $0.reminderId == id }
+        settings.userFeedback.removeAll { $0.reminderId == id }
         save()
     }
 
@@ -225,6 +249,7 @@ final class AppState: ObservableObject {
         isRepeating: Bool,
         dueDate: Date?,
         type: ReminderType = .standard,
+        parsedIntent: ParsedReminderIntent,
         trigger: TriggerInfo? = nil,
         voice: VoiceInfo? = nil,
         link: LinkInfo? = nil
@@ -242,27 +267,98 @@ final class AppState: ObservableObject {
         r.trigger = trigger
         r.voice   = voice
         r.link    = link
-
-        // Standard reminders get a scheduled time. Trigger/voice/linked/oneoff
-        // are surfaced by other paths (events, parent completion, end-of-day).
-        if type == .standard {
-            let total = AdaptiveEngine.dailyNudgeCount(across: reminders)
-            r.nextNudgeAt = AdaptiveEngine.nextNudgeDate(for: r, settings: settings, dailyTotalSent: total)
+        r.kind    = type == .standard ? parsedIntent.kind : ReminderKind(from: type)
+        r.schedule = ReminderSchedule(
+            cadence: parsedIntent.suggestedCadence,
+            preferredWindow: parsedIntent.timeWindow,
+            dailyCap: frequency.maxDailyNudges,
+            lastPlannedAt: nil,
+            confidence: parsedIntent.confidence,
+            lastExplanation: parsedIntent.explanation,
+            lastPlanStatus: nil,
+            interpretationSummary: parsedIntent.interpretationSummary,
+            fallbackSummary: parsedIntent.triggerReadiness?.fallbackStrategy?.explanation
+        )
+        if r.kind == .eventBased || type == .trigger {
+            r.triggerDefinition = parsedIntent.trigger ?? trigger.map {
+                ReminderTrigger(
+                    condition: TriggerCondition(
+                        type: $0.kind == .place ? .geofenceEnter : .customContext,
+                        subject: $0.id,
+                        locationAlias: $0.kind == .place ? $0.id : nil
+                    ),
+                    confidence: 0.6
+                )
+            }
         }
+
+        let result = NotificationPlanner.plan(
+            for: r,
+            context: NudgeDecisionContext(allReminders: reminders, settings: settings)
+        )
+        applyPlanResult(result, to: &r)
 
         reminders.append(r)
         save()
 
         if type == .standard {
-            Task { await scheduler.scheduleNudge(for: r, settings: settings) }
+            Task { await scheduler.scheduleNudge(for: r, settings: settings, allReminders: reminders) }
         }
         showAddSheet = false
     }
 
     func recordInteraction(_ type: InteractionType, for id: UUID) {
         updateReminder(id) { r in
-            let total = AdaptiveEngine.dailyNudgeCount(across: self.reminders)
-            AdaptiveEngine.recordInteraction(type, on: &r, settings: self.settings, dailyTotalSent: total)
+            let feedbackAction: UserFeedbackAction = switch type {
+            case .completed: .done
+            case .skipped: .maybeLater
+            case .ignored: .ignored
+            }
+            self.recordFeedback(feedbackAction, on: &r)
+        }
+    }
+
+    func recordNotificationOpened(_ id: UUID) {
+        updateReminder(id) { r in
+            self.recordFeedback(.opened, on: &r)
+        }
+    }
+
+    func recordTriggerEvent(_ event: TriggerEvent) {
+        var changedReminderIds: [UUID] = []
+        for idx in reminders.indices {
+            guard let trigger = reminders[idx].triggerDefinition else { continue }
+            guard TriggerExecutionPolicy.shouldFire(
+                condition: trigger.condition,
+                event: event,
+                eventLog: settings.triggerEventLog,
+                now: event.createdAt
+            ) else { continue }
+
+            let result = NotificationPlanner.plan(
+                for: reminders[idx],
+                context: NudgeDecisionContext(allReminders: reminders, settings: settings, now: event.createdAt, triggeredBy: event)
+            )
+            applyPlanResult(result, to: &reminders[idx])
+            reminders[idx].triggerDefinition?.lastFiredAt = event.createdAt
+            settings.triggerEventLog.append(TriggerEventLog(
+                triggerType: event.type,
+                reminderId: reminders[idx].id,
+                confidence: result.confidence,
+                createdAt: event.createdAt,
+                fired: result.isScheduled
+            ))
+            DebugLog.trigger("Event \(event.type.rawValue) for \(reminders[idx].id): \(result.status.rawValue)")
+            changedReminderIds.append(reminders[idx].id)
+        }
+        guard !changedReminderIds.isEmpty else { return }
+        save()
+        Task {
+            for id in changedReminderIds {
+                guard let reminder = reminders.first(where: { $0.id == id }) else { continue }
+                scheduler.cancel(reminderId: id)
+                await scheduler.scheduleNudge(for: reminder, settings: settings, allReminders: reminders)
+            }
         }
     }
 
@@ -315,6 +411,121 @@ final class AppState: ObservableObject {
         toggleDone(id)
     }
 
+    private func recordFeedback(_ action: UserFeedbackAction, on reminder: inout Reminder) {
+        let feedback = FeedbackRecorder.record(action, reminder: &reminder, settings: settings)
+        settings.userFeedback.append(feedback)
+        settings.nudgeHistory.append(NudgeHistory(
+            reminderId: reminder.id,
+            plannedAt: reminder.nextNudgeAt ?? feedback.createdAt,
+            deliveredAt: feedback.createdAt,
+            action: action
+        ))
+        var rhythm = UserRhythmModel(profile: settings.userRhythmProfile)
+        rhythm.record(feedback, category: reminder.category)
+        settings.userRhythmProfile = rhythm.profile
+
+        if action != .done {
+            let result = NotificationPlanner.plan(
+                for: reminder,
+                context: NudgeDecisionContext(allReminders: reminders, settings: settings)
+            )
+            applyPlanResult(result, to: &reminder)
+        }
+    }
+
+    private func applyPlanResult(_ result: NudgePlanResult, to reminder: inout Reminder, recordHistory: Bool = true) {
+        reminder.schedule?.lastPlanStatus = result.status
+        reminder.schedule?.lastExplanation = result.explanation
+        reminder.schedule?.confidence = result.confidence
+        DebugLog.plan("\(reminder.id): \(result.status.rawValue) - \(result.explanation.text)")
+        guard let plan = result.plan else {
+            reminder.nextNudgeAt = nil
+            return
+        }
+        reminder.nextNudgeAt = plan.nextFireDate
+        reminder.schedule?.preferredWindow = plan.window
+        reminder.schedule?.lastPlannedAt = .now
+        if recordHistory {
+            settings.nudgeHistory.append(NudgeHistory(reminderId: reminder.id, plannedAt: plan.nextFireDate))
+        }
+    }
+
+    private func reconcileLoadedReminderPlans() {
+        for idx in reminders.indices where !reminders[idx].isDone {
+            let isExpired = (reminders[idx].nextNudgeAt ?? .distantFuture) <= .now
+            let missingReadiness = reminders[idx].schedule?.lastPlanStatus == nil
+            guard reminders[idx].nextNudgeAt == nil || isExpired || missingReadiness else { continue }
+
+            let result = NotificationPlanner.plan(
+                for: reminders[idx],
+                context: NudgeDecisionContext(allReminders: reminders, settings: settings)
+            )
+            applyPlanResult(result, to: &reminders[idx], recordHistory: false)
+            DebugLog.plan("Reconciled loaded reminder \(reminders[idx].id)")
+        }
+    }
+
+    private func recordMorningFirstUnlockIfNeeded(now: Date = .now) {
+        let cal = Calendar.current
+        let hour = cal.component(.hour, from: now)
+        guard hour >= settings.quietHoursEnd && hour <= 11 else { return }
+        let day = todayISO()
+        guard settings.lastMorningFirstUnlockDate != day else { return }
+        settings.lastMorningFirstUnlockDate = day
+        recordTriggerEvent(TriggerEventSimulator.morningFirstUnlock(now: now))
+    }
+
+    private func refreshNotificationPermissionState() async {
+        let status: PermissionStatus = await scheduler.isAuthorized ? .granted : .denied
+        upsertPermission(.notifications, status: status)
+    }
+
+    private func upsertPermission(_ permission: PermissionKind, status: PermissionStatus) {
+        if let idx = settings.permissionStates.firstIndex(where: { $0.permission == permission }) {
+            settings.permissionStates[idx].status = status
+            settings.permissionStates[idx].updatedAt = .now
+        } else {
+            settings.permissionStates.append(PermissionState(permission: permission, status: status))
+        }
+    }
+
+    #if DEBUG
+    func auditReminderReadiness() -> [ReminderDebugSummary] {
+        reminders.map { reminder in
+            let result = NotificationPlanner.plan(
+                for: reminder,
+                context: NudgeDecisionContext(allReminders: reminders, settings: settings)
+            )
+            return ReminderDebugSummary(
+                kind: reminder.kind,
+                category: reminder.category,
+                trigger: reminder.triggerDefinition?.condition,
+                nextPlannedNudge: result.plan?.nextFireDate,
+                confidence: result.confidence,
+                status: result.status,
+                explanation: result.explanation
+            )
+        }
+    }
+
+    func debugReminderSummary(for id: UUID) -> ReminderDebugSummary? {
+        guard let reminder = reminders.first(where: { $0.id == id }) else { return nil }
+        let result = NotificationPlanner.plan(
+            for: reminder,
+            context: NudgeDecisionContext(allReminders: reminders, settings: settings)
+        )
+        return ReminderDebugSummary(
+            kind: reminder.kind,
+            category: reminder.category,
+            trigger: reminder.triggerDefinition?.condition,
+            nextPlannedNudge: result.plan?.nextFireDate,
+            confidence: result.confidence,
+            status: result.status,
+            explanation: result.explanation
+        )
+    }
+    #endif
+
     private func updateReminder(_ id: UUID, transform: (inout Reminder) -> Void) {
         guard let idx = reminders.firstIndex(where: { $0.id == id }) else { return }
         transform(&reminders[idx])
@@ -330,6 +541,18 @@ final class AppState: ObservableObject {
         let fmt = ISO8601DateFormatter()
         fmt.formatOptions = [.withFullDate]
         return fmt.string(from: Calendar.current.startOfDay(for: .now))
+    }
+}
+
+private extension ReminderKind {
+    init(from type: ReminderType) {
+        switch type {
+        case .standard: self = .timeBased
+        case .trigger: self = .eventBased
+        case .voice: self = .voice
+        case .linked: self = .followOn
+        case .oneoff: self = .oneOff
+        }
     }
 }
 

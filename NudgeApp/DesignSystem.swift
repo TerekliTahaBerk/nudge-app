@@ -29,6 +29,12 @@ extension Color {
         case .move: return .catMove
         case .mind: return .catMind
         case .grow: return .catGrow
+        case .social: return .catMind
+        case .task: return .jgrT3.opacity(0.65)
+        case .errand: return .catMove
+        case .health: return .catBody
+        case .home: return .catGrow
+        case .work: return .catMind.opacity(0.85)
         case .none: return .clear
         }
     }

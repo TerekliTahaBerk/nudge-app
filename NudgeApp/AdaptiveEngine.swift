@@ -252,6 +252,30 @@ enum AdaptiveEngine {
                 "This might be a good time.",
                 "No pressure, just a gentle nudge.",
             ]
+        case .social:
+            pool = [
+                "Maybe this is a nice moment to reach out.",
+                "If it feels right, a quick check-in could be good.",
+                "A gentle reminder to connect.",
+            ]
+        case .task, .work:
+            pool = [
+                "Perhaps a small step on this now?",
+                "This might be a good moment for it.",
+                "When you're ready, it's here.",
+            ]
+        case .errand, .home:
+            pool = [
+                "If now works, this little thing is waiting.",
+                "A gentle reminder for this.",
+                "Maybe a good moment to take care of it.",
+            ]
+        case .health:
+            pool = [
+                "Your body might appreciate this.",
+                "If it feels right, take a moment for this.",
+                "A gentle health nudge.",
+            ]
         case .none:
             pool = [
                 "A gentle reminder, just for you.",
@@ -260,7 +284,8 @@ enum AdaptiveEngine {
                 "A little reminder, softly.",
             ]
         }
-        return pool[Int.random(in: 0..<pool.count)]
+        let stableIndex = abs(reminder.id.uuidString.hashValue) % pool.count
+        return pool[stableIndex]
     }
 
     // ── MARK: Record interaction + update reminder ────────────────────────────
@@ -328,7 +353,7 @@ enum AdaptiveEngine {
         let now     = Date.now
         let curHour = calendar.component(.hour, from: now)
         let target  = bestHour(for: reminder, settings: settings)
-        let minute  = Int.random(in: 5..<35)   // gentle randomness, not on the dot
+        let minute  = stableMinute(for: reminder.id)
 
         if target > curHour {
             return calendar.date(bySettingHour: target, minute: minute, second: 0, of: now) ?? now
@@ -343,6 +368,11 @@ enum AdaptiveEngine {
         return calendar.date(bySettingHour: hour, minute: 10, second: 0, of: tomorrow) ?? tomorrow
     }
 
+    private static func stableMinute(for id: UUID) -> Int {
+        let sum = id.uuidString.unicodeScalars.reduce(0) { $0 + Int($1.value) }
+        return 5 + (sum % 30)
+    }
+
     private static func nextWeeklyDate(
         for reminder: Reminder,
         settings: AppSettings,
@@ -352,7 +382,6 @@ enum AdaptiveEngine {
         let now   = Date.now
 
         // Find the best day in the next 7 days
-        let today = calendar.component(.weekday, from: now)
         let sortedDays = (1...7).sorted { a, b in
             (rates[a] ?? 0.5) > (rates[b] ?? 0.5)
         }

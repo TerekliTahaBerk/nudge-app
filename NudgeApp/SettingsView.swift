@@ -6,7 +6,7 @@ struct SettingsView: View {
     @State private var draft: AppSettings
 
     init() {
-        // Will be overwritten in body via .onAppear; placeholder init.
+        // Initial draft is replaced with current app settings on appear.
         _draft = State(initialValue: AppSettings())
     }
 
@@ -139,7 +139,7 @@ struct SettingsView: View {
     /// dominated and which fell off. Always observation, never goal.
     private func weeklyObservation() -> String {
         let week = BehaviorAnalytics.weeklyCategoryStack(from: state.reminders)
-        var totals: [ReminderCategory: Double] = [.body: 0, .move: 0, .mind: 0, .grow: 0]
+        var totals: [ReminderCategory: Double] = Dictionary(uniqueKeysWithValues: ReminderCategory.allCases.map { ($0, 0) })
         for d in week { for (k, v) in d { totals[k, default: 0] += v } }
         let nonZero = totals.filter { $0.value > 0.01 }
         guard !nonZero.isEmpty else { return "A quiet week. Nothing to read into." }
@@ -189,7 +189,7 @@ struct NotifPermissionRow: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Button("Allow notifications →") {
                         Task {
-                            await NotificationScheduler.shared.requestPermission()
+                            _ = await NotificationScheduler.shared.requestPermission()
                             await refresh()
                         }
                     }

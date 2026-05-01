@@ -334,8 +334,13 @@ struct VoiceRecorderView: View {
     private var displaySamples: [Double] {
         if !samples.isEmpty { return samples }
         // seed pattern when nothing recorded yet (only used after recorded state)
-        return (0..<38).map { i in
-            0.35 + 0.55 * abs(sin(Double(i) * 0.6 + 0.4)) * (1 - Double(i) / 80)
+        return (0..<38).map { index -> Double in
+            let sampleIndex = Double(index)
+            let phase = sampleIndex * 0.6 + 0.4
+            let envelope = 1 - sampleIndex / 80
+            let wave = abs(sin(phase))
+
+            return 0.35 + 0.55 * wave * envelope
         }
     }
 

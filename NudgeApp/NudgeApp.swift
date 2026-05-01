@@ -8,7 +8,7 @@ struct NudgeApp: App {
 
     init() {
         // Wire notification action callbacks before any view appears.
-        let scheduler = NotificationScheduler.shared
+        _ = NotificationScheduler.shared
         // Callbacks are set in AppState.init after @StateObject is ready.
         // The delegate is registered on NotificationScheduler.shared init.
     }

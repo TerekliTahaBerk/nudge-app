@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct AddReminderView: View {
+    let editingReminder: Reminder?
+
     @EnvironmentObject var state: AppState
     @Environment(\.dismiss) private var dismiss
     @FocusState private var textFocused: Bool
@@ -28,6 +30,11 @@ struct AddReminderView: View {
 
     private var catColor: Color { Color.categoryColor(analysis.category) }
     private var hasCat: Bool    { analysis.category != .none }
+    private var isEditing: Bool { editingReminder != nil }
+    private var reminderHistory: [Reminder] {
+        guard let editingID = editingReminder?.id else { return state.reminders }
+        return state.reminders.filter { $0.id != editingID }
+    }
     private var inputValidation: ReminderInputValidator.Result {
         ReminderInputValidator.validate(text, allowsEmpty: kind == .voice)
     }
@@ -45,6 +52,25 @@ struct AddReminderView: View {
     }
 
     private var showFreqAndDate: Bool { kind == .standard }
+
+    init(editingReminder: Reminder? = nil) {
+        self.editingReminder = editingReminder
+        let initialText = editingReminder?.text ?? ""
+        let initialAnalysis = initialText.isEmpty
+            ? TextAnalysis(category: .none, suggestedFrequency: .smart, suggestedTimePreference: .flexible, isHabit: false, confidence: 0)
+            : TextAnalyzer.analyze(initialText)
+        _text = State(initialValue: initialText)
+        _frequency = State(initialValue: editingReminder?.frequency ?? initialAnalysis.suggestedFrequency)
+        _isRepeating = State(initialValue: editingReminder?.isRepeating ?? false)
+        _dueDate = State(initialValue: editingReminder?.dueDate)
+        _analysis = State(initialValue: initialAnalysis)
+        _kind = State(initialValue: editingReminder?.type ?? .standard)
+        _trigger = State(initialValue: editingReminder?.trigger ?? editingReminder?.triggerDefinition.map(Self.triggerInfo))
+        _voice = State(initialValue: editingReminder?.voice)
+        _link = State(initialValue: editingReminder?.link)
+        _parsedIntent = State(initialValue: nil)
+        _userPickedFrequency = State(initialValue: editingReminder != nil)
+    }
 
     private var placeholder: String {
         switch kind {
@@ -134,6 +160,18 @@ struct AddReminderView: View {
                             .padding(.horizontal, 32)
                             .padding(.top, 10)
                             .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+
+                        if let editingReminder {
+                            Spacer().frame(height: 18)
+                            EditStatusView(
+                                status: ReminderRowStatus(reminder: editingReminder, settings: state.settings),
+                                onOpenSettings: {
+                                    dismiss()
+                                    state.screen = .settings
+                                }
+                            )
+                            .padding(.horizontal, 32)
                         }
 
                         Spacer().frame(height: 28)
@@ -228,6 +266,19 @@ struct AddReminderView: View {
                         .font(JGRFont.regular(15))
                         .foregroundStyle(Color.jgrT3)
                         .tracking(-0.1)
+                        .accessibilityLabel("Cancel")
+
+                    if let editingReminder {
+                        Button("Remove") {
+                            state.removeReminder(editingReminder.id)
+                            dismiss()
+                        }
+                        .font(JGRFont.regular(15))
+                        .foregroundStyle(Color.jgrT3)
+                        .tracking(-0.1)
+                        .padding(.leading, 18)
+                        .accessibilityLabel("Remove reminder")
+                    }
 
                     Spacer()
 
@@ -256,7 +307,13 @@ struct AddReminderView: View {
         let trimmed = validated.sanitizedText.trimmingCharacters(in: .whitespacesAndNewlines)
         // For voice with no label, use a soft fallback so it's identifiable in the list.
         let finalText = trimmed.isEmpty ? "Voice note" : trimmed
-        let parsedIntent = self.parsedIntent ?? ReminderUnderstandingEngine.parse(finalText, history: state.reminders)
+        var parsedIntent = self.parsedIntent ?? ReminderUnderstandingEngine.parse(finalText, history: reminderHistory)
+        if kind == .trigger, parsedIntent.trigger == nil, let existingTrigger = editingReminder?.triggerDefinition {
+            parsedIntent.kind = .eventBased
+            parsedIntent.trigger = existingTrigger
+            parsedIntent.timeWindow = nil
+            parsedIntent.explanation = NudgeExplanation(code: .waitingForTrigger, text: "Waiting for \(existingTrigger.condition.type.rawValue).")
+        }
         let finalAnalysis = TextAnalysis(
             category: parsedIntent.category,
             suggestedFrequency: frequency,
@@ -271,18 +328,35 @@ struct AddReminderView: View {
         let resolvedRepeating: Bool                = kind == .standard ? isRepeating : false
         let resolvedDate: Date?                    = kind == .standard ? dueDate : nil
 
-        state.addReminder(
-            text: finalText,
-            analysis: finalAnalysis,
-            frequency: resolvedFrequency,
-            isRepeating: resolvedRepeating,
-            dueDate: resolvedDate,
-            type: kind,
-            parsedIntent: parsedIntent,
-            trigger: trigger,
-            voice: voice,
-            link: link
-        )
+        if let editingReminder {
+            state.editReminder(
+                id: editingReminder.id,
+                text: finalText,
+                analysis: finalAnalysis,
+                frequency: resolvedFrequency,
+                isRepeating: resolvedRepeating,
+                dueDate: resolvedDate,
+                type: kind,
+                parsedIntent: parsedIntent,
+                trigger: trigger,
+                voice: voice,
+                link: link
+            )
+        } else {
+            state.addReminder(
+                text: finalText,
+                analysis: finalAnalysis,
+                frequency: resolvedFrequency,
+                isRepeating: resolvedRepeating,
+                dueDate: resolvedDate,
+                type: kind,
+                parsedIntent: parsedIntent,
+                trigger: trigger,
+                voice: voice,
+                link: link
+            )
+        }
+        dismiss()
     }
 
     private func handleTextChange(_ newValue: String) {
@@ -298,7 +372,7 @@ struct AddReminderView: View {
             guard !Task.isCancelled else { return }
 
             let result = TextAnalyzer.analyze(sanitized)
-            let parsed = ReminderUnderstandingEngine.parse(sanitized, history: state.reminders)
+            let parsed = ReminderUnderstandingEngine.parse(sanitized, history: reminderHistory)
             guard !Task.isCancelled else { return }
 
             withAnimation(.easeInOut(duration: 0.2)) {
@@ -322,6 +396,14 @@ struct AddReminderView: View {
             }
         }
     }
+
+    private static func triggerInfo(from definition: ReminderTrigger) -> TriggerInfo {
+        let condition = definition.condition
+        if let alias = condition.locationAlias {
+            return TriggerInfo(kind: .place, id: alias, label: "When I get to \(alias)")
+        }
+        return TriggerInfo(kind: .moment, id: condition.subject, label: condition.subject ?? condition.type.rawValue)
+    }
 }
 
 private extension TriggerType {
@@ -336,6 +418,31 @@ private extension TimeWindowLabel {
         case .earlyMorning, .morning, .lateMorning: return .morning
         case .evening, .night: return .evening
         case .afternoon: return .flexible
+        }
+    }
+}
+
+// MARK: - Edit Status
+
+private struct EditStatusView: View {
+    let status: ReminderRowStatus
+    let onOpenSettings: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(status.label)
+                .font(JGRFont.regular(13))
+                .foregroundStyle(Color.jgrT3)
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if status.isActionable {
+                Button("Open settings") { onOpenSettings() }
+                    .font(JGRFont.regular(13))
+                    .foregroundStyle(Color.jgrT2)
+                    .frame(minHeight: 36, alignment: .leading)
+                    .accessibilityLabel("Open settings")
+            }
         }
     }
 }

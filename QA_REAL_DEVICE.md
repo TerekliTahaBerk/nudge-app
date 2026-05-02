@@ -40,6 +40,69 @@ This checklist is for real-device readiness only. Keep the app calm and unchange
 2. Save.
 3. Confirm it appears in the list and has either a scheduled plan or a clear not-scheduled reason in DEBUG summary.
 
+### Add button reachability
+
+1. Add enough reminders to make the Today list scroll.
+2. Confirm `Add a reminder` stays visible and tappable at the bottom.
+3. Rotate through short and long reminder text.
+4. Confirm the button does not jump as the list grows and remains above the home indicator.
+
+### Many reminders scrolling
+
+1. Create or seed 30+ reminders.
+2. Scroll from top to bottom and back.
+3. Confirm rows keep comfortable spacing, long text wraps, no row overlaps the sticky Add control, and the bottom-most reminder can be fully read.
+
+### Edit reminder text
+
+1. Tap an existing reminder row.
+2. Change the reminder text.
+3. Tap `Save`.
+4. Confirm the same row updates in place and no duplicate reminder appears.
+5. Confirm any pending notification for the old text is cancelled and a new plan exists where appropriate.
+
+### Edit reminder kind
+
+1. Tap a normal time-based reminder.
+2. Change it to `When something happens`, choose Home/Work/Gym or type an event phrase.
+3. Save.
+4. Confirm the same reminder ID is updated, the old time notification is cancelled, and trigger/geofence readiness is shown.
+5. Edit the same reminder back to `A reminder`.
+6. Confirm trigger/geofence registration is removed if no other reminder uses it and the reminder schedules as time-based.
+
+### Cancel edit
+
+1. Tap a reminder row.
+2. Change text, kind, cadence, or setup fields.
+3. Tap `Cancel`.
+4. Confirm the row remains unchanged and no new notification/geofence changes are made.
+
+### Remove reminder
+
+1. Swipe a reminder row to reveal `Remove`.
+2. Tap `Remove`.
+3. Confirm the row disappears, notification request is cancelled, trigger logs/history for that reminder are removed, and global rhythm data remains.
+
+### Undo remove
+
+1. Remove a reminder.
+2. If the quiet `Removed · Undo` receipt appears, tap `Undo`.
+3. Confirm the same reminder returns and is replanned/re-registered as needed.
+
+### Keyboard and sheet behavior
+
+1. Open Add Reminder and paste a long paragraph with emoji and Turkish characters.
+2. Rapidly type, delete, paste, and clear the field.
+3. Confirm the input remains visible, Save/Cancel remain reachable, content scrolls when tall, and no crash occurs.
+4. Repeat while editing an existing reminder.
+
+### Pending setup row
+
+1. Create `Eve varınca çöpleri çıkar` without Home saved.
+2. Confirm the Today row says `Needs Home location`.
+3. Tap the row and confirm the edit sheet repeats the setup state with a route to Settings.
+4. Return after setting Home and confirm the reminder becomes `Waiting for trigger`.
+
 ### Create Leave it to me reminder
 
 1. Add `Drink water`.
@@ -107,10 +170,14 @@ This checklist is for real-device readiness only. Keep the app calm and unchange
 ## Location Alias Setup
 
 1. Open Settings → Places.
-2. For "Home": tap "Set here" while physically at home.
-3. Confirm coordinates are saved and status shows "Saved".
-4. Create `Eve varınca çöpleri çıkar`.
-5. Confirm reminder status changes from `missingLocationAlias` to `waitingForTrigger` (or `scheduled`).
+2. Confirm Home, Work, and Gym each show either `Saved`, `Not set`, or `Location permission denied`.
+3. For "Home": tap "Set current location" while physically at home.
+4. If permission is denied, confirm the row says location permission is off/denied and fails gracefully.
+5. If location fetch fails, confirm a short error appears and the app does not crash.
+6. If Home was already saved, tap "Update current location" and confirm the saved state remains.
+7. Confirm coordinates are saved and status shows "Saved".
+8. Create `Eve varınca çöpleri çıkar`.
+9. Confirm reminder status changes from `missingLocationAlias` to `waitingForTrigger` (or `scheduled`).
 
 ---
 
@@ -188,6 +255,23 @@ This checklist is for real-device readiness only. Keep the app calm and unchange
    - Home arrival reminder has `waitingForTrigger` status (if alias + permission set).
    - Geofence region is re-registered.
    - Charging adapter has started (plug charger to verify).
+   - No duplicate pending notification requests were created for the same reminder.
+   - Permission prompts do not repeat unless initiated from setup/settings.
+
+## Notification After Edit
+
+1. Create a normal reminder with notifications allowed.
+2. Edit its text and cadence.
+3. Background the app.
+4. Confirm the notification uses the edited reminder and the old pending request no longer appears.
+
+## Geofence After Edit
+
+1. Create a Home arrival reminder and confirm `JGR_GEOFENCE_home` is monitored.
+2. Edit it to a Work arrival reminder.
+3. Confirm Home monitoring is removed if no other reminder uses Home and Work monitoring is registered if Work is saved.
+4. Edit it to a normal time-based reminder.
+5. Confirm the geofence is unregistered if no remaining reminder references that alias.
 
 ---
 

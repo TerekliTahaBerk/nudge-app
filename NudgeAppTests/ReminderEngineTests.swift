@@ -2,6 +2,204 @@ import XCTest
 @testable import NudgeApp
 
 final class ReminderEngineTests: XCTestCase {
+    @MainActor
+    func testEditingReminderPreservesSameIDAndDoesNotDuplicate() async {
+        let scheduler = FakeNotificationScheduler()
+        let location = FakeLocationAdapter()
+        var settings = AppSettings()
+        settings.permissionStates = [PermissionState(permission: .notifications, status: .granted)]
+        let state = AppState(scheduler: scheduler, locationAdapter: location, startsServicesAutomatically: false)
+        let original = Reminder(text: "Drink water", category: .body)
+        state.settings = settings
+        state.reminders = [original]
+
+        let parsed = ReminderUnderstandingEngine.parse("Drink tea")
+        state.editReminder(
+            id: original.id,
+            text: parsed.reminderText,
+            analysis: TextAnalysis(category: parsed.category, suggestedFrequency: .daily, suggestedTimePreference: .morning, isHabit: true, confidence: parsed.confidence),
+            frequency: .daily,
+            isRepeating: true,
+            dueDate: nil,
+            type: .standard,
+            parsedIntent: parsed
+        )
+        await Task.yield()
+
+        XCTAssertEqual(state.reminders.count, 1)
+        XCTAssertEqual(state.reminders.first?.id, original.id)
+        XCTAssertEqual(state.reminders.first?.text, "Drink tea")
+        XCTAssertEqual(scheduler.cancelledReminderIds, [original.id])
+        XCTAssertEqual(scheduler.scheduledReminderIds, [original.id])
+    }
+
+    @MainActor
+    func testEditingTimeBasedToEventBasedCancelsAndReconcilesTrigger() async {
+        let scheduler = FakeNotificationScheduler()
+        let location = FakeLocationAdapter()
+        var settings = AppSettings()
+        settings.permissionStates = [
+            PermissionState(permission: .notifications, status: .granted),
+            PermissionState(permission: .location, status: .granted)
+        ]
+        settings.locationAliases = [LocationAlias(name: "home", latitude: 41.0, longitude: 29.0)]
+        let state = AppState(scheduler: scheduler, locationAdapter: location, startsServicesAutomatically: false)
+        let original = Reminder(text: "Drink water", category: .body)
+        state.settings = settings
+        state.reminders = [original]
+
+        let parsed = ReminderUnderstandingEngine.parse("Eve varınca çöpleri çıkar")
+        state.editReminder(
+            id: original.id,
+            text: parsed.reminderText,
+            analysis: TextAnalysis(category: parsed.category, suggestedFrequency: .smart, suggestedTimePreference: .flexible, isHabit: false, confidence: parsed.confidence),
+            frequency: .smart,
+            isRepeating: false,
+            dueDate: nil,
+            type: .trigger,
+            parsedIntent: parsed,
+            trigger: TriggerInfo(kind: .place, id: "home", label: "When I get home")
+        )
+        await Task.yield()
+
+        XCTAssertEqual(state.reminders.first?.id, original.id)
+        XCTAssertEqual(state.reminders.first?.kind, .eventBased)
+        XCTAssertEqual(state.reminders.first?.triggerDefinition?.condition.locationAlias, "home")
+        XCTAssertEqual(scheduler.cancelledReminderIds, [original.id])
+        XCTAssertEqual(location.reconcileCount, 1)
+    }
+
+    @MainActor
+    func testEditingEventBasedToTimeBasedUnregistersTriggerAndSchedules() async {
+        let scheduler = FakeNotificationScheduler()
+        let location = FakeLocationAdapter()
+        var settings = AppSettings()
+        settings.permissionStates = [PermissionState(permission: .notifications, status: .granted)]
+        let state = AppState(scheduler: scheduler, locationAdapter: location, startsServicesAutomatically: false)
+        var original = Reminder(text: "Take out trash", category: .home)
+        original.kind = .eventBased
+        original.type = .trigger
+        original.triggerDefinition = ReminderTrigger(
+            condition: TriggerCondition(type: .geofenceEnter, subject: "home", locationAlias: "home", requiresPermission: [.notifications, .location]),
+            confidence: 0.88
+        )
+        state.settings = settings
+        state.reminders = [original]
+
+        let parsed = ReminderUnderstandingEngine.parse("Take out trash every morning")
+        state.editReminder(
+            id: original.id,
+            text: parsed.reminderText,
+            analysis: TextAnalysis(category: parsed.category, suggestedFrequency: .daily, suggestedTimePreference: .morning, isHabit: false, confidence: parsed.confidence),
+            frequency: .daily,
+            isRepeating: false,
+            dueDate: nil,
+            type: .standard,
+            parsedIntent: parsed
+        )
+        await Task.yield()
+
+        XCTAssertEqual(state.reminders.first?.kind, .timeBased)
+        XCTAssertNil(state.reminders.first?.triggerDefinition)
+        XCTAssertEqual(location.reconcileCount, 1)
+        XCTAssertEqual(scheduler.scheduledReminderIds, [original.id])
+    }
+
+    @MainActor
+    func testDeletingCancelsNotificationAndTriggerReferencesButKeepsRhythmProfile() {
+        let scheduler = FakeNotificationScheduler()
+        let location = FakeLocationAdapter()
+        let state = AppState(scheduler: scheduler, locationAdapter: location, startsServicesAutomatically: false)
+        let reminder = Reminder(text: "Walk", category: .move)
+        var settings = AppSettings()
+        settings.triggerEventLog = [TriggerEventLog(triggerType: .chargingStarted, reminderId: reminder.id, confidence: 1)]
+        settings.nudgeHistory = [NudgeHistory(reminderId: reminder.id, plannedAt: fixedDate(hour: 9))]
+        settings.userFeedback = [UserFeedback(reminderId: reminder.id, action: .done)]
+        settings.userRhythmProfile.confidenceByCategory["move"] = 0.8
+        state.settings = settings
+        state.reminders = [reminder]
+
+        state.removeReminder(reminder.id)
+
+        XCTAssertTrue(state.reminders.isEmpty)
+        XCTAssertEqual(scheduler.cancelledReminderIds, [reminder.id])
+        XCTAssertTrue(state.settings.triggerEventLog.isEmpty)
+        XCTAssertTrue(state.settings.nudgeHistory.isEmpty)
+        XCTAssertTrue(state.settings.userFeedback.isEmpty)
+        XCTAssertEqual(state.settings.userRhythmProfile.confidenceByCategory["move"], 0.8)
+        XCTAssertEqual(location.reconcileCount, 1)
+    }
+
+    @MainActor
+    func testUndoRemoveRestoresReminderAndPerReminderReferences() {
+        let scheduler = FakeNotificationScheduler()
+        let location = FakeLocationAdapter()
+        let state = AppState(scheduler: scheduler, locationAdapter: location, startsServicesAutomatically: false)
+        let reminder = Reminder(text: "Walk", category: .move)
+        state.reminders = [reminder]
+        state.settings.triggerEventLog = [TriggerEventLog(triggerType: .chargingStarted, reminderId: reminder.id, confidence: 1)]
+        state.settings.nudgeHistory = [NudgeHistory(reminderId: reminder.id, plannedAt: fixedDate(hour: 9))]
+        state.settings.userFeedback = [UserFeedback(reminderId: reminder.id, action: .done)]
+
+        state.removeReminder(reminder.id)
+        state.restoreRemovedReminder()
+
+        XCTAssertEqual(state.reminders.first?.id, reminder.id)
+        XCTAssertEqual(state.settings.triggerEventLog.first?.reminderId, reminder.id)
+        XCTAssertEqual(state.settings.nudgeHistory.first?.reminderId, reminder.id)
+        XCTAssertEqual(state.settings.userFeedback.first?.reminderId, reminder.id)
+        XCTAssertEqual(location.reconcileCount, 2)
+    }
+
+    func testPendingHomeAliasBecomesActionableAfterAliasIsAdded() {
+        var settings = AppSettings()
+        settings.permissionStates = [
+            PermissionState(permission: .notifications, status: .granted),
+            PermissionState(permission: .location, status: .granted)
+        ]
+        let parsed = ReminderUnderstandingEngine.parse("Eve varınca çöpleri çıkar")
+        var reminder = reminder(from: parsed)
+        var result = NotificationPlanner.plan(
+            for: reminder,
+            context: NudgeDecisionContext(allReminders: [reminder], settings: settings, now: fixedDate(hour: 9))
+        )
+        XCTAssertEqual(result.status, .missingLocationAlias)
+
+        settings.locationAliases = [LocationAlias(name: "home", latitude: 41.0, longitude: 29.0)]
+        result = NotificationPlanner.plan(
+            for: reminder,
+            context: NudgeDecisionContext(allReminders: [reminder], settings: settings, now: fixedDate(hour: 9))
+        )
+
+        XCTAssertEqual(result.status, .waitingForTrigger)
+    }
+
+    @MainActor
+    func testCancelEditLeavesReminderUnchanged() {
+        let state = AppState(scheduler: FakeNotificationScheduler(), locationAdapter: FakeLocationAdapter(), startsServicesAutomatically: false)
+        let reminder = Reminder(text: "Read", category: .mind)
+        state.reminders = [reminder]
+
+        XCTAssertEqual(state.reminders.first?.id, reminder.id)
+        XCTAssertEqual(state.reminders.first?.text, "Read")
+    }
+
+    func testManyReminderStatusesDoNotCrash() {
+        var settings = AppSettings()
+        settings.permissionStates = [PermissionState(permission: .notifications, status: .granted)]
+        let reminders = (0..<80).map { idx -> Reminder in
+            var reminder = Reminder(text: String(repeating: "Long reminder text ", count: 8) + "\(idx)", category: .task)
+            reminder.schedule = ReminderSchedule(cadence: .daily, preferredWindow: nil, dailyCap: 1, lastPlanStatus: idx.isMultiple(of: 2) ? .scheduled : .waitingForTrigger)
+            reminder.nextNudgeAt = fixedDate(hour: 10).addingTimeInterval(TimeInterval(idx * 60))
+            return reminder
+        }
+
+        let statuses = reminders.map { ReminderRowStatus(reminder: $0, settings: settings).label }
+
+        XCTAssertEqual(statuses.count, 80)
+        XCTAssertTrue(statuses.allSatisfy { !$0.isEmpty })
+    }
+
     func testReminderInputAcceptsRapidMixedTextAndBoundsLongPastes() {
         let mixed = "Şarja takınca meditasyon yap 💧🙂\nDrink water before lunch"
         XCTAssertTrue(ReminderInputValidator.validate(mixed).isValid)
@@ -573,5 +771,60 @@ final class ReminderEngineTests: XCTestCase {
 
     private func fixedDate(hour: Int, minute: Int = 0) -> Date {
         Calendar.current.date(from: DateComponents(year: 2026, month: 5, day: 1, hour: hour, minute: minute))!
+    }
+}
+
+@MainActor
+private final class FakeNotificationScheduler: ReminderNotificationScheduling {
+    var onNudgeDone: ((UUID) -> Void)?
+    var onNudgeLater: ((UUID) -> Void)?
+    var onNudgeOpened: ((UUID) -> Void)?
+    var authorized = true
+    var requestedPermission = false
+    var scheduledReminderIds: [UUID] = []
+    var cancelledReminderIds: [UUID] = []
+    var cancelAllCount = 0
+
+    var isAuthorized: Bool { get async { authorized } }
+
+    func requestPermission() async -> Bool {
+        requestedPermission = true
+        return authorized
+    }
+
+    func scheduleNudge(for reminder: Reminder, settings: AppSettings, allReminders: [Reminder]?) async {
+        scheduledReminderIds.append(reminder.id)
+    }
+
+    func scheduleAll(_ reminders: [Reminder], settings: AppSettings) async {
+        scheduledReminderIds.append(contentsOf: reminders.map(\.id))
+    }
+
+    func cancel(reminderId: UUID) {
+        cancelledReminderIds.append(reminderId)
+    }
+
+    func cancelAll() {
+        cancelAllCount += 1
+    }
+}
+
+private final class FakeLocationAdapter: LocationTriggerAdapter {
+    var onTriggerEvent: ((TriggerEvent) -> Void)?
+    var onPermissionChange: ((PermissionStatus) -> Void)?
+    var currentAuthorizationStatus: PermissionStatus = .granted
+    var requestedPermission = false
+    var reconcileCount = 0
+    var reconciledAliases: [[LocationAlias]] = []
+    var reconciledReminders: [[Reminder]] = []
+
+    func requestPermission() {
+        requestedPermission = true
+    }
+
+    func reconcile(aliases: [LocationAlias], reminders: [Reminder]) {
+        reconcileCount += 1
+        reconciledAliases.append(aliases)
+        reconciledReminders.append(reminders)
     }
 }

@@ -258,17 +258,25 @@ struct PlaceRow: View {
 
     @State private var locating = false
     @State private var fetchError: String?
+    @State private var authorizationStatus: CLAuthorizationStatus = .notDetermined
 
     private var hasCoords: Bool { alias.latitude != nil && alias.longitude != nil }
+    private var permissionDenied: Bool {
+        authorizationStatus == .denied || authorizationStatus == .restricted
+    }
 
     var body: some View {
-        HStack {
+        HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(name.capitalized)
                     .font(JGRFont.regular(17))
                     .foregroundStyle(Color.jgrT1)
                     .tracking(-0.2)
-                if hasCoords {
+                if permissionDenied {
+                    Text("Location permission denied")
+                        .font(JGRFont.regular(12.5))
+                        .foregroundStyle(Color.jgrT3)
+                } else if hasCoords {
                     Text("Saved")
                         .font(JGRFont.regular(12.5))
                         .foregroundStyle(Color.jgrT3)
@@ -284,22 +292,28 @@ struct PlaceRow: View {
                 }
             }
             Spacer()
-            Button(locating ? "Locating…" : (hasCoords ? "Update" : "Set here")) {
+            Button(locating ? "Locating..." : (hasCoords ? "Update current location" : "Set current location")) {
                 setCurrentLocation()
             }
             .font(JGRFont.regular(14))
-            .foregroundStyle(locating ? Color.jgrT4 : Color.jgrT2)
-            .disabled(locating)
+            .foregroundStyle(locating || permissionDenied ? Color.jgrT4 : Color.jgrT2)
+            .disabled(locating || permissionDenied)
             .buttonStyle(.plain)
+            .frame(minHeight: 44, alignment: .trailing)
+            .multilineTextAlignment(.trailing)
+            .accessibilityLabel(hasCoords ? "Update current location for \(name)" : "Set current location for \(name)")
         }
+        .onAppear { authorizationStatus = currentLocationAuthorizationStatus() }
     }
 
     private func setCurrentLocation() {
         locating = true
         fetchError = nil
+        authorizationStatus = currentLocationAuthorizationStatus()
         OneTimeLocationFetcher.fetchCurrentLocation { result in
             DispatchQueue.main.async {
                 locating = false
+                authorizationStatus = currentLocationAuthorizationStatus()
                 switch result {
                 case .success(let coord):
                     alias.latitude = coord.latitude
@@ -311,6 +325,10 @@ struct PlaceRow: View {
             }
         }
     }
+
+    private func currentLocationAuthorizationStatus() -> CLAuthorizationStatus {
+        CLLocationManager().authorizationStatus
+    }
 }
 
 // MARK: - One-Shot Location Fetcher
@@ -318,16 +336,36 @@ struct PlaceRow: View {
 final class OneTimeLocationFetcher: NSObject, CLLocationManagerDelegate {
     private let manager = CLLocationManager()
     private var completion: ((Result<CLLocationCoordinate2D, Error>) -> Void)?
-    private static var key = "OneTimeLocationFetcherRetainKey"
+    private static var retainKey: UInt8 = 0
 
     static func fetchCurrentLocation(completion: @escaping (Result<CLLocationCoordinate2D, Error>) -> Void) {
         let fetcher = OneTimeLocationFetcher()
         fetcher.completion = completion
         fetcher.manager.delegate = fetcher
         fetcher.manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
-        fetcher.manager.requestLocation()
+        switch fetcher.manager.authorizationStatus {
+        case .notDetermined:
+            fetcher.manager.requestWhenInUseAuthorization()
+        case .denied, .restricted:
+            completion(.failure(LocationFetchError.permissionDenied))
+            return
+        default:
+            fetcher.manager.requestLocation()
+        }
         // Retain fetcher until callback fires.
-        objc_setAssociatedObject(fetcher.manager, &OneTimeLocationFetcher.key, fetcher, .OBJC_ASSOCIATION_RETAIN)
+        objc_setAssociatedObject(fetcher.manager, &OneTimeLocationFetcher.retainKey, fetcher, .OBJC_ASSOCIATION_RETAIN)
+    }
+
+    func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+        switch manager.authorizationStatus {
+        case .authorizedAlways, .authorizedWhenInUse:
+            manager.requestLocation()
+        case .denied, .restricted:
+            completion?(.failure(LocationFetchError.permissionDenied))
+            cleanup(manager: manager)
+        default:
+            break
+        }
     }
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
@@ -343,6 +381,17 @@ final class OneTimeLocationFetcher: NSObject, CLLocationManagerDelegate {
 
     private func cleanup(manager: CLLocationManager) {
         completion = nil
-        objc_setAssociatedObject(manager, &OneTimeLocationFetcher.key, nil, .OBJC_ASSOCIATION_RETAIN)
+        objc_setAssociatedObject(manager, &OneTimeLocationFetcher.retainKey, nil, .OBJC_ASSOCIATION_RETAIN)
+    }
+}
+
+enum LocationFetchError: LocalizedError {
+    case permissionDenied
+
+    var errorDescription: String? {
+        switch self {
+        case .permissionDenied:
+            return "Location permission is off."
+        }
     }
 }

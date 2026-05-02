@@ -30,19 +30,30 @@ final class AppState: ObservableObject {
     @Published var settings: AppSettings
     @Published var activeNudge: ActiveNudge?
     @Published var showAddSheet: Bool   = false
+    @Published var editingReminder: Reminder?
+    @Published var removedReminderReceipt: RemovedReminderReceipt?
     @Published var behaviorBanner: BehaviorBanner = .none
 
     // ── Internal ───────────────────────────────────────────────────
     private var nudgeTimer: AnyCancellable?
     private var midnightTimer: AnyCancellable?
     private var maybeLaterTimer: AnyCancellable?
-    private let scheduler = NotificationScheduler.shared
+    private let scheduler: ReminderNotificationScheduling
     private var deviceContextAdapter: IOSDeviceContextAdapter?
-    private var locationAdapter: IOSLocationTriggerAdapter?
+    private var locationAdapter: LocationTriggerAdapter?
+    private var removeUndoTimer: AnyCancellable?
+    private let startsServicesAutomatically: Bool
 
     // ── Init ───────────────────────────────────────────────────────
 
-    init() {
+    init(
+        scheduler: ReminderNotificationScheduling? = nil,
+        locationAdapter: LocationTriggerAdapter? = nil,
+        startsServicesAutomatically: Bool = true
+    ) {
+        self.scheduler = scheduler ?? NotificationScheduler.shared
+        self.locationAdapter = locationAdapter
+        self.startsServicesAutomatically = startsServicesAutomatically
         let savedSettings  = Store.loadSettings()
         let savedReminders = Store.loadReminders()
 
@@ -51,16 +62,18 @@ final class AppState: ObservableObject {
         reconcileLoadedReminderPlans()
 
         // Wire notification callbacks
-        scheduler.onNudgeDone  = { [weak self] id in self?.markDone(id) }
-        scheduler.onNudgeLater = { [weak self] id in
+        self.scheduler.onNudgeDone  = { [weak self] id in self?.markDone(id) }
+        self.scheduler.onNudgeLater = { [weak self] id in
             self?.recordInteraction(.skipped, for: id)
         }
-        scheduler.onNudgeOpened = { [weak self] id in
+        self.scheduler.onNudgeOpened = { [weak self] id in
             self?.recordNotificationOpened(id)
         }
 
         // Start background services after init
-        Task { await postInitSetup() }
+        if startsServicesAutomatically {
+            Task { await postInitSetup() }
+        }
     }
 
     private func postInitSetup() async {
@@ -72,7 +85,7 @@ final class AppState: ObservableObject {
         deviceContextAdapter = dca
 
         // ── Location adapter (geofencing) ──────────────────────────
-        let la = IOSLocationTriggerAdapter()
+        let la = locationAdapter ?? IOSLocationTriggerAdapter()
         la.onTriggerEvent = { [weak self] event in
             Task { @MainActor in self?.recordTriggerEvent(event) }
         }
@@ -88,13 +101,12 @@ final class AppState: ObservableObject {
             }
         }
         locationAdapter = la
-        la.requestPermission()
+        if la.currentAuthorizationStatus == .unknown {
+            la.requestPermission()
+        }
         upsertPermission(.location, status: la.currentAuthorizationStatus)
 
         // ── Notification permission ────────────────────────────────
-        if await !scheduler.isAuthorized {
-            _ = await scheduler.requestPermission()
-        }
         await refreshNotificationPermissionState()
 
         // ── Reconcile everything on launch ─────────────────────────
@@ -264,6 +276,10 @@ final class AppState: ObservableObject {
     }
 
     func removeReminder(_ id: UUID) {
+        guard let removed = reminders.first(where: { $0.id == id }) else { return }
+        let removedTriggerLog = settings.triggerEventLog.filter { $0.reminderId == id }
+        let removedHistory = settings.nudgeHistory.filter { $0.reminderId == id }
+        let removedFeedback = settings.userFeedback.filter { $0.reminderId == id }
         scheduler.cancel(reminderId: id)
         reminders.removeAll { $0.id == id }
         settings.triggerEventLog.removeAll { $0.reminderId == id }
@@ -271,6 +287,46 @@ final class AppState: ObservableObject {
         settings.userFeedback.removeAll { $0.reminderId == id }
         save()
         locationAdapter?.reconcile(aliases: settings.locationAliases, reminders: reminders)
+        showRemovedReceipt(
+            for: removed,
+            triggerEventLog: removedTriggerLog,
+            nudgeHistory: removedHistory,
+            userFeedback: removedFeedback
+        )
+    }
+
+    func restoreRemovedReminder() {
+        guard let receipt = removedReminderReceipt else { return }
+        removeUndoTimer?.cancel()
+        removedReminderReceipt = nil
+        reminders.append(receipt.reminder)
+        settings.triggerEventLog.append(contentsOf: receipt.triggerEventLog)
+        settings.nudgeHistory.append(contentsOf: receipt.nudgeHistory)
+        settings.userFeedback.append(contentsOf: receipt.userFeedback)
+        replanReminder(id: receipt.reminder.id)
+        save()
+        locationAdapter?.reconcile(aliases: settings.locationAliases, reminders: reminders)
+        if let reminder = reminders.first(where: { $0.id == receipt.reminder.id }) {
+            Task { await scheduler.scheduleNudge(for: reminder, settings: settings, allReminders: reminders) }
+        }
+    }
+
+    private func showRemovedReceipt(
+        for reminder: Reminder,
+        triggerEventLog: [TriggerEventLog],
+        nudgeHistory: [NudgeHistory],
+        userFeedback: [UserFeedback]
+    ) {
+        removedReminderReceipt = RemovedReminderReceipt(
+            reminder: reminder,
+            triggerEventLog: triggerEventLog,
+            nudgeHistory: nudgeHistory,
+            userFeedback: userFeedback
+        )
+        removeUndoTimer?.cancel()
+        removeUndoTimer = Just(())
+            .delay(for: .seconds(7), scheduler: RunLoop.main)
+            .sink { [weak self] in self?.removedReminderReceipt = nil }
     }
 
     func addReminder(
@@ -340,6 +396,77 @@ final class AppState: ObservableObject {
             locationAdapter?.reconcile(aliases: settings.locationAliases, reminders: reminders)
         }
         showAddSheet = false
+    }
+
+    func editReminder(
+        id: UUID,
+        text: String,
+        analysis: TextAnalysis,
+        frequency: FrequencyPreference,
+        isRepeating: Bool,
+        dueDate: Date?,
+        type: ReminderType,
+        parsedIntent: ParsedReminderIntent,
+        trigger: TriggerInfo? = nil,
+        voice: VoiceInfo? = nil,
+        link: LinkInfo? = nil
+    ) {
+        guard let idx = reminders.firstIndex(where: { $0.id == id }) else { return }
+        scheduler.cancel(reminderId: id)
+        let oldTrigger = reminders[idx].triggerDefinition?.condition
+
+        reminders[idx].text = text
+        reminders[idx].category = analysis.category
+        reminders[idx].frequency = frequency
+        reminders[idx].timePreference = analysis.suggestedTimePreference
+        reminders[idx].isRepeating = isRepeating || (type == .standard && analysis.isHabit)
+        reminders[idx].dueDate = dueDate
+        reminders[idx].type = type
+        reminders[idx].trigger = trigger
+        reminders[idx].voice = voice
+        reminders[idx].link = link
+        reminders[idx].kind = type == .standard ? parsedIntent.kind : ReminderKind(from: type)
+        reminders[idx].nextNudgeAt = nil
+        reminders[idx].schedule = ReminderSchedule(
+            cadence: parsedIntent.suggestedCadence,
+            preferredWindow: parsedIntent.timeWindow,
+            dailyCap: frequency.maxDailyNudges,
+            lastPlannedAt: nil,
+            confidence: parsedIntent.confidence,
+            lastExplanation: parsedIntent.explanation,
+            lastPlanStatus: nil,
+            interpretationSummary: parsedIntent.interpretationSummary,
+            fallbackSummary: parsedIntent.triggerReadiness?.fallbackStrategy?.explanation
+        )
+        if reminders[idx].kind == .eventBased || type == .trigger {
+            reminders[idx].triggerDefinition = parsedIntent.trigger ?? trigger.map {
+                ReminderTrigger(
+                    condition: TriggerCondition(
+                        type: $0.kind == .place ? .geofenceEnter : .customContext,
+                        subject: $0.id,
+                        locationAlias: $0.kind == .place ? $0.id : nil
+                    ),
+                    confidence: 0.6
+                )
+            }
+        } else {
+            reminders[idx].triggerDefinition = nil
+        }
+
+        let result = NotificationPlanner.plan(
+            for: reminders[idx],
+            context: NudgeDecisionContext(allReminders: reminders, settings: settings)
+        )
+        applyPlanResult(result, to: &reminders[idx])
+        save()
+
+        let newTrigger = reminders[idx].triggerDefinition?.condition
+        if oldTrigger != newTrigger {
+            locationAdapter?.reconcile(aliases: settings.locationAliases, reminders: reminders)
+        }
+        Task { await scheduler.scheduleNudge(for: reminders[idx], settings: settings, allReminders: reminders) }
+        showAddSheet = false
+        editingReminder = nil
     }
 
     func recordInteraction(_ type: InteractionType, for id: UUID) {
@@ -500,6 +627,15 @@ final class AppState: ObservableObject {
             applyPlanResult(result, to: &reminders[idx], recordHistory: false)
             DebugLog.plan("Reconciled loaded reminder \(reminders[idx].id)")
         }
+    }
+
+    private func replanReminder(id: UUID) {
+        guard let idx = reminders.firstIndex(where: { $0.id == id }), !reminders[idx].isDone else { return }
+        let result = NotificationPlanner.plan(
+            for: reminders[idx],
+            context: NudgeDecisionContext(allReminders: reminders, settings: settings)
+        )
+        applyPlanResult(result, to: &reminders[idx], recordHistory: false)
     }
 
     private func reconcileReminderSystemOnLaunch() {
@@ -706,12 +842,12 @@ struct HomeView: View {
                     Spacer().frame(height: 24)
 
                     // Reminder list
-                    LazyVStack(spacing: 0) {
+                    LazyVStack(spacing: 6) {
                         ForEach(Array(state.reminders.enumerated()), id: \.element.id) { idx, r in
                             if r.hasGap && idx != 0 {
-                                Spacer().frame(height: 24)
+                                Spacer().frame(height: 16)
                             }
-                            ReminderRowView(reminder: r) {
+                            ReminderRowView(reminder: r, settings: state.settings) {
                                 withAnimation(.easeInOut(duration: 0.45)) {
                                     state.toggleDone(r.id)
                                 }
@@ -719,6 +855,9 @@ struct HomeView: View {
                                 withAnimation(.easeOut(duration: 0.3)) {
                                     state.removeReminder(r.id)
                                 }
+                            } onEdit: {
+                                state.editingReminder = r
+                                state.showAddSheet = true
                             }
                             .padding(.horizontal, 16)
                         }
@@ -744,44 +883,165 @@ struct HomeView: View {
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
                     }
 
-                    // Spacer for bottom button
-                    Spacer().frame(height: 100)
+                    // Spacer for bottom button and safe area.
+                    Spacer().frame(height: 132)
                 }
             }
             .scrollIndicators(.hidden)
-
-            // Add button
-            HStack {
-                Button {
-                    state.showAddSheet = true
-                } label: {
-                    HStack(spacing: 8) {
-                        Text("+").font(.system(size: 17, weight: .light))
-                        Text("Add a reminder").font(JGRFont.regular(15))
-                    }
-                    .foregroundStyle(Color.jgrT3)
-                    .padding(.vertical, 6)
-                }
-                Spacer()
-            }
-            .padding(.horizontal, 32)
-            .padding(.bottom, 52)
         }
         .background(Color.jgrBg)
+        .safeAreaInset(edge: .bottom) {
+            VStack(alignment: .leading, spacing: 10) {
+                if state.removedReminderReceipt != nil {
+                    HStack(spacing: 10) {
+                        Text("Removed")
+                            .font(JGRFont.regular(13))
+                            .foregroundStyle(Color.jgrT3)
+                        Text("·")
+                            .font(JGRFont.regular(13))
+                            .foregroundStyle(Color.jgrT4)
+                        Button("Undo") {
+                            withAnimation(.easeOut(duration: 0.25)) {
+                                state.restoreRemovedReminder()
+                            }
+                        }
+                        .font(JGRFont.medium(13))
+                        .foregroundStyle(Color.jgrT2)
+                        .accessibilityLabel("Undo remove")
+                    }
+                    .padding(.horizontal, 32)
+                    .transition(.opacity.combined(with: .move(edge: .bottom)))
+                }
+
+                HStack {
+                    Button {
+                        state.editingReminder = nil
+                        state.showAddSheet = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            Text("+").font(.system(size: 17, weight: .light))
+                            Text("Add a reminder").font(JGRFont.regular(15))
+                        }
+                        .foregroundStyle(Color.jgrT3)
+                        .frame(minHeight: 44, alignment: .center)
+                    }
+                    .accessibilityLabel("Add reminder")
+                    Spacer()
+                }
+                .padding(.horizontal, 32)
+            }
+            .padding(.top, 10)
+            .padding(.bottom, 12)
+            .background(Color.jgrBg.opacity(0.96))
+        }
         .sheet(isPresented: $state.showAddSheet) {
-            AddReminderView()
+            AddReminderView(editingReminder: state.editingReminder)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.hidden)
+                .onDisappear { state.editingReminder = nil }
         }
     }
 }
 
 // MARK: - Reminder Row View
 
+struct ReminderRowStatus {
+    let label: String
+    let isActionable: Bool
+
+    init(reminder: Reminder, settings: AppSettings) {
+        if reminder.isDone {
+            self.label = "Completed today"
+            self.isActionable = false
+            return
+        }
+        if let pausedUntil = reminder.pausedUntil, pausedUntil > .now {
+            self.label = "Paused for now"
+            self.isActionable = false
+            return
+        }
+
+        let status = reminder.schedule?.lastPlanStatus
+        switch status {
+        case .scheduled:
+            if let next = reminder.nextNudgeAt {
+                self.label = "Scheduled \(Self.shortRelativeDate(next))"
+            } else {
+                self.label = "Scheduled"
+            }
+            self.isActionable = false
+        case .waitingForTrigger:
+            self.label = "Waiting for trigger"
+            self.isActionable = false
+        case .missingPermission:
+            let missing = reminder.triggerDefinition.map {
+                PermissionManager.missingPermissions(for: $0.condition, states: settings.permissionStates)
+            } ?? [.notifications]
+            if missing.contains(.location) {
+                self.label = "Needs location permission"
+            } else {
+                self.label = "Needs notifications"
+            }
+            self.isActionable = true
+        case .missingLocationAlias:
+            let alias = reminder.triggerDefinition?.condition.locationAlias ?? "place"
+            self.label = "Needs \(alias.capitalized) location"
+            self.isActionable = true
+        case .unsupported:
+            let subject = reminder.triggerDefinition?.condition.subject ?? ""
+            self.label = subject == "laptop_opened"
+                ? "Laptop trigger needs a future companion setup"
+                : "Trigger needs setup"
+            self.isActionable = false
+        case .dailyCapReached:
+            self.label = "Today's gentle limit reached"
+            self.isActionable = false
+        case .quietHours:
+            self.label = "Waiting until quiet hours end"
+            self.isActionable = false
+        case .clustered:
+            self.label = "Moved away from another nudge"
+            self.isActionable = false
+        case .paused:
+            self.label = "Paused for now"
+            self.isActionable = false
+        case .needsClarification:
+            self.label = "Needs a little setup"
+            self.isActionable = true
+        case .none:
+            switch reminder.kind {
+            case .eventBased:
+                self.label = "Waiting for trigger"
+            case .voice:
+                self.label = "Voice"
+            case .followOn:
+                self.label = "Follows another reminder"
+            case .oneOff:
+                self.label = "One-off"
+            case .timeBased:
+                self.label = reminder.frequency.label
+            }
+            self.isActionable = false
+        }
+    }
+
+    private static func shortRelativeDate(_ date: Date) -> String {
+        let mins = Int(date.timeIntervalSinceNow / 60)
+        if mins >= 0 && mins < 60 { return "in \(max(1, mins)) min" }
+        if Calendar.current.isDateInToday(date) {
+            return date.formatted(.dateTime.hour().minute())
+        }
+        if Calendar.current.isDateInTomorrow(date) { return "tomorrow" }
+        return date.formatted(.dateTime.weekday(.abbreviated))
+    }
+}
+
 struct ReminderRowView: View {
     let reminder: Reminder
+    let settings: AppSettings
     let onToggle: () -> Void
     let onRemove: () -> Void
+    let onEdit: () -> Void
 
     @State private var offset: CGFloat    = 0
     @State private var revealed: Bool     = false
@@ -789,6 +1049,7 @@ struct ReminderRowView: View {
 
     private var hasCat: Bool { reminder.category != .none }
     private var isSmart: Bool { reminder.frequency == .smart && reminder.dueDate == nil && !reminder.isDone }
+    private var status: ReminderRowStatus { ReminderRowStatus(reminder: reminder, settings: settings) }
 
     var body: some View {
         ZStack(alignment: .trailing) {
@@ -800,17 +1061,20 @@ struct ReminderRowView: View {
                 .font(JGRFont.regular(13))
                 .foregroundStyle(Color.jgrT2)
                 .padding(.trailing, 24)
+                .frame(minHeight: 44)
+                .accessibilityLabel("Remove reminder")
                 .transition(.opacity)
             }
 
-            // Row button
-            Button(action: {
-                guard !dragActive else { return }
-                if revealed { revealed = false; return }
-                onToggle()
-            }) {
-                HStack(spacing: 18) {
+            HStack(spacing: 18) {
+                Button(action: onToggle) {
                     JGRCheckbox(done: reminder.isDone)
+                        .frame(width: 44, height: 44)
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(reminder.isDone ? "Mark reminder not done" : "Mark reminder done")
+
+                VStack(alignment: .leading, spacing: 6) {
                     Text(reminder.text)
                         .font(JGRFont.regular(17))
                         .foregroundStyle(reminder.isDone ? Color.jgrT3 : Color.jgrT1)
@@ -818,52 +1082,67 @@ struct ReminderRowView: View {
                         .opacity(reminder.isDone ? 0.45 : 1)
                         .tracking(-0.2)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .lineLimit(2)
+                        .lineLimit(3)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                    Spacer(minLength: 0)
-
-                    // Smart-timing dot
-                    if isSmart {
-                        Circle()
-                            .fill(Color.jgrT3)
-                            .frame(width: 4, height: 4)
-                    }
-
-                    // Repeat glyph or due-date badge
-                    if let due = reminder.dueDate {
-                        Text(formatShortDate(due))
-                            .font(JGRFont.regular(11.5))
-                            .foregroundStyle(Color.jgrT3)
-                            .opacity(reminder.isDone ? 0.35 : 0.8)
-                    } else if reminder.isRepeating {
-                        Text("↻")
-                            .font(JGRFont.regular(11.5))
-                            .foregroundStyle(Color.jgrT3)
-                            .opacity(reminder.isDone ? 0.35 : 0.8)
-                    }
-
-                    // Type glyph — only for non-standard kinds, hairline + etiketsiz
-                    if reminder.type != .standard {
+                    HStack(spacing: 7) {
                         TypeGlyph(type: reminder.type)
-                            .opacity(reminder.isDone ? 0.35 : 1)
-                            .padding(.leading, 2)
+                            .opacity(reminder.isDone ? 0.3 : 0.75)
+                        Text(status.label)
+                            .font(JGRFont.regular(12.5))
+                            .foregroundStyle(status.isActionable ? Color.jgrT2 : Color.jgrT3)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
+                    .opacity(status.label.isEmpty ? 0 : 1)
                 }
-                .padding(.vertical, 20)
-                .padding(.leading, 16)
-                .background(Color.jgrBg)
-                .overlay(alignment: .leading) {
-                    // Category capsule — 3px on left edge
-                    if hasCat {
-                        RoundedRectangle(cornerRadius: 2)
-                            .fill(Color.categoryColor(reminder.category))
-                            .frame(width: 3)
-                            .opacity(reminder.isDone ? 0.25 : 0.75)
-                            .padding(.vertical, 24)
-                    }
+
+                Spacer(minLength: 0)
+
+                // Smart-timing dot
+                if isSmart {
+                    Circle()
+                        .fill(Color.jgrT3)
+                        .frame(width: 4, height: 4)
+                }
+
+                // Repeat glyph or due-date badge
+                if let due = reminder.dueDate {
+                    Text(formatShortDate(due))
+                        .font(JGRFont.regular(11.5))
+                        .foregroundStyle(Color.jgrT3)
+                        .opacity(reminder.isDone ? 0.35 : 0.8)
+                } else if reminder.isRepeating {
+                    Text("↻")
+                        .font(JGRFont.regular(11.5))
+                        .foregroundStyle(Color.jgrT3)
+                        .opacity(reminder.isDone ? 0.35 : 0.8)
                 }
             }
-            .buttonStyle(.plain)
+            .padding(.vertical, 14)
+            .padding(.leading, 4)
+            .padding(.trailing, 16)
+            .frame(minHeight: 62)
+            .background(Color.jgrBg)
+            .contentShape(Rectangle())
+            .onTapGesture {
+                guard !dragActive else { return }
+                if revealed { revealed = false; return }
+                onEdit()
+            }
+            .overlay(alignment: .leading) {
+                // Category capsule — 3px on left edge
+                if hasCat {
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(Color.categoryColor(reminder.category))
+                        .frame(width: 3)
+                        .opacity(reminder.isDone ? 0.25 : 0.75)
+                        .padding(.vertical, 24)
+                }
+            }
+            .accessibilityLabel("Edit \(reminder.text)")
+            .accessibilityHint(status.isActionable ? "\(status.label). Double tap to edit." : "Double tap to edit.")
+            .accessibilityAddTraits(.isButton)
             .offset(x: offset)
             .gesture(
                 DragGesture(minimumDistance: 10)

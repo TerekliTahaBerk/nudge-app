@@ -6,7 +6,20 @@ import UserNotifications
 // action handling happens here so the rest of the app stays decoupled.
 
 @MainActor
-final class NotificationScheduler: NSObject, UNUserNotificationCenterDelegate {
+protocol ReminderNotificationScheduling: AnyObject {
+    var onNudgeDone: ((UUID) -> Void)? { get set }
+    var onNudgeLater: ((UUID) -> Void)? { get set }
+    var onNudgeOpened: ((UUID) -> Void)? { get set }
+    var isAuthorized: Bool { get async }
+    func requestPermission() async -> Bool
+    func scheduleNudge(for reminder: Reminder, settings: AppSettings, allReminders: [Reminder]?) async
+    func scheduleAll(_ reminders: [Reminder], settings: AppSettings) async
+    func cancel(reminderId: UUID)
+    func cancelAll()
+}
+
+@MainActor
+final class NotificationScheduler: NSObject, ReminderNotificationScheduling, UNUserNotificationCenterDelegate {
 
     static let shared = NotificationScheduler()
 

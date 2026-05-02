@@ -771,3 +771,11 @@ struct ActiveNudge: Identifiable {
     let body: String
     let category: ReminderCategory
 }
+
+struct RemovedReminderReceipt: Identifiable {
+    let id = UUID()
+    let reminder: Reminder
+    let triggerEventLog: [TriggerEventLog]
+    let nudgeHistory: [NudgeHistory]
+    let userFeedback: [UserFeedback]
+}

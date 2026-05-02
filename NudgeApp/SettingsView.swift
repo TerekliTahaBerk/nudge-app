@@ -1,5 +1,6 @@
 import SwiftUI
 import UserNotifications
+import CoreLocation
 
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
@@ -124,6 +125,16 @@ struct SettingsView: View {
 
                     Spacer().frame(height: 44)
 
+                    // ── Places ──────────────────────────────────────────────
+                    Eyebrow(text: "Places").padding(.horizontal, 32)
+                    Spacer().frame(height: 22)
+                    PlacesSection(aliases: $draft.locationAliases, onSaved: {
+                        state.updateSettings(draft)
+                        state.reconcileLocationTriggers()
+                    })
+                    .padding(.horizontal, 32)
+                    Spacer().frame(height: 44)
+
                     // ── Notification permission ──────────────────────────────
                     NotifPermissionRow()
 
@@ -211,5 +222,127 @@ struct NotifPermissionRow: View {
     private func refresh() async {
         let s = await UNUserNotificationCenter.current().notificationSettings()
         status = s.authorizationStatus
+    }
+}
+
+// MARK: - Places Section
+
+struct PlacesSection: View {
+    @Binding var aliases: [LocationAlias]
+    let onSaved: () -> Void
+
+    private let canonicalNames = ["home", "work", "gym"]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            ForEach(canonicalNames, id: \.self) { name in
+                PlaceRow(name: name, alias: aliasBinding(for: name), onSaved: onSaved)
+            }
+        }
+    }
+
+    private func aliasBinding(for name: String) -> Binding<LocationAlias> {
+        if let idx = aliases.firstIndex(where: { $0.name == name }) {
+            return $aliases[idx]
+        }
+        aliases.append(LocationAlias(name: name))
+        let idx = aliases.count - 1
+        return $aliases[idx]
+    }
+}
+
+struct PlaceRow: View {
+    let name: String
+    @Binding var alias: LocationAlias
+    let onSaved: () -> Void
+
+    @State private var locating = false
+    @State private var fetchError: String?
+
+    private var hasCoords: Bool { alias.latitude != nil && alias.longitude != nil }
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(name.capitalized)
+                    .font(JGRFont.regular(17))
+                    .foregroundStyle(Color.jgrT1)
+                    .tracking(-0.2)
+                if hasCoords {
+                    Text("Saved")
+                        .font(JGRFont.regular(12.5))
+                        .foregroundStyle(Color.jgrT3)
+                } else {
+                    Text("Not set")
+                        .font(JGRFont.regular(12.5))
+                        .foregroundStyle(Color.jgrT4)
+                }
+                if let fetchError {
+                    Text(fetchError)
+                        .font(JGRFont.regular(12))
+                        .foregroundStyle(.red.opacity(0.7))
+                }
+            }
+            Spacer()
+            Button(locating ? "Locating…" : (hasCoords ? "Update" : "Set here")) {
+                setCurrentLocation()
+            }
+            .font(JGRFont.regular(14))
+            .foregroundStyle(locating ? Color.jgrT4 : Color.jgrT2)
+            .disabled(locating)
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func setCurrentLocation() {
+        locating = true
+        fetchError = nil
+        OneTimeLocationFetcher.fetchCurrentLocation { result in
+            DispatchQueue.main.async {
+                locating = false
+                switch result {
+                case .success(let coord):
+                    alias.latitude = coord.latitude
+                    alias.longitude = coord.longitude
+                    onSaved()
+                case .failure(let error):
+                    fetchError = error.localizedDescription
+                }
+            }
+        }
+    }
+}
+
+// MARK: - One-Shot Location Fetcher
+
+final class OneTimeLocationFetcher: NSObject, CLLocationManagerDelegate {
+    private let manager = CLLocationManager()
+    private var completion: ((Result<CLLocationCoordinate2D, Error>) -> Void)?
+    private static var key = "OneTimeLocationFetcherRetainKey"
+
+    static func fetchCurrentLocation(completion: @escaping (Result<CLLocationCoordinate2D, Error>) -> Void) {
+        let fetcher = OneTimeLocationFetcher()
+        fetcher.completion = completion
+        fetcher.manager.delegate = fetcher
+        fetcher.manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+        fetcher.manager.requestLocation()
+        // Retain fetcher until callback fires.
+        objc_setAssociatedObject(fetcher.manager, &OneTimeLocationFetcher.key, fetcher, .OBJC_ASSOCIATION_RETAIN)
+    }
+
+    func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+        guard let loc = locations.last else { return }
+        completion?(.success(loc.coordinate))
+        cleanup(manager: manager)
+    }
+
+    func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) {
+        completion?(.failure(error))
+        cleanup(manager: manager)
+    }
+
+    private func cleanup(manager: CLLocationManager) {
+        completion = nil
+        objc_setAssociatedObject(manager, &OneTimeLocationFetcher.key, nil, .OBJC_ASSOCIATION_RETAIN)
     }
 }

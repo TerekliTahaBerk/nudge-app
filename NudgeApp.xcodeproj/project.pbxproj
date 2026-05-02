@@ -27,6 +27,8 @@
 		AA11BB22CC33DD4400000051 /* TriggerEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD4400000031 /* TriggerEngine.swift */; };
 		AA11BB22CC33DD4400000052 /* ReminderEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD4400000032 /* ReminderEngineTests.swift */; };
 		AA11BB22CC33DD4400000053 /* DebugLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD4400000033 /* DebugLog.swift */; };
+		AA11BB22CC33DD4400000054 /* IOSDeviceContextAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD4400000034 /* IOSDeviceContextAdapter.swift */; };
+		AA11BB22CC33DD4400000055 /* IOSLocationTriggerAdapter.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD4400000035 /* IOSLocationTriggerAdapter.swift */; };
 		AA11BB22CC33DD4400000061 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = AA11BB22CC33DD4400000060 /* Assets.xcassets */; };
 /* End PBXBuildFile section */
 
@@ -63,6 +65,8 @@
 		AA11BB22CC33DD4400000031 /* TriggerEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TriggerEngine.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD4400000032 /* ReminderEngineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ReminderEngineTests.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD4400000033 /* DebugLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DebugLog.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD4400000034 /* IOSDeviceContextAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSDeviceContextAdapter.swift; sourceTree = "<group>"; };
+		AA11BB22CC33DD4400000035 /* IOSLocationTriggerAdapter.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IOSLocationTriggerAdapter.swift; sourceTree = "<group>"; };
 		AA11BB22CC33DD4400000060 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		AA11BB22CC33DD4400000070 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -125,6 +129,8 @@
 				AA11BB22CC33DD4400000030 /* IntelligentSchedulingEngine.swift */,
 				AA11BB22CC33DD4400000031 /* TriggerEngine.swift */,
 				AA11BB22CC33DD4400000033 /* DebugLog.swift */,
+				AA11BB22CC33DD4400000034 /* IOSDeviceContextAdapter.swift */,
+				AA11BB22CC33DD4400000035 /* IOSLocationTriggerAdapter.swift */,
 				AA11BB22CC33DD4400000060 /* Assets.xcassets */,
 				AA11BB22CC33DD4400000070 /* Info.plist */,
 			);
@@ -257,6 +263,8 @@
 				AA11BB22CC33DD4400000050 /* IntelligentSchedulingEngine.swift in Sources */,
 				AA11BB22CC33DD4400000051 /* TriggerEngine.swift in Sources */,
 				AA11BB22CC33DD4400000053 /* DebugLog.swift in Sources */,
+				AA11BB22CC33DD4400000054 /* IOSDeviceContextAdapter.swift in Sources */,
+				AA11BB22CC33DD4400000055 /* IOSLocationTriggerAdapter.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

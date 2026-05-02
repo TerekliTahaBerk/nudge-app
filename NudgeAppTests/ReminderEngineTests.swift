@@ -427,6 +427,136 @@ final class ReminderEngineTests: XCTestCase {
         }
     }
 
+    // MARK: - Production-readiness tests
+
+    func testTriggerEventSchedulesImmediately() {
+        var settings = AppSettings()
+        settings.permissionStates = [PermissionState(permission: .notifications, status: .granted)]
+        var reminder = Reminder(text: "Take vitamins", category: .health)
+        reminder.kind = .eventBased
+        reminder.triggerDefinition = ReminderTrigger(
+            condition: TriggerCondition(
+                type: .chargingStarted,
+                subject: TriggerType.chargingStarted.rawValue,
+                requiresPermission: [.notifications]
+            ),
+            confidence: 0.9
+        )
+        let eventTime = fixedDate(hour: 14) // 2 PM — not quiet
+        let event = TriggerEvent(type: .chargingStarted, subject: TriggerType.chargingStarted.rawValue, confidence: 1.0, createdAt: eventTime)
+        let result = NotificationPlanner.plan(
+            for: reminder,
+            context: NudgeDecisionContext(allReminders: [reminder], settings: settings, now: eventTime, triggeredBy: event)
+        )
+        XCTAssertEqual(result.status, .scheduled)
+        XCTAssertEqual(result.explanation.code, .triggeredByEvent)
+        // Fire date must be within 10 seconds of event time, not pushed to a future window.
+        XCTAssertLessThan(result.plan!.nextFireDate.timeIntervalSince(eventTime), 10)
+    }
+
+    func testCoordinateLessAliasIsNotReady() {
+        var settings = AppSettings()
+        settings.permissionStates = [
+            PermissionState(permission: .notifications, status: .granted),
+            PermissionState(permission: .location, status: .granted)
+        ]
+        settings.locationAliases = [LocationAlias(name: "home")] // no lat/lon
+        var reminder = Reminder(text: "Take out trash", category: .home)
+        reminder.kind = .eventBased
+        reminder.triggerDefinition = ReminderTrigger(
+            condition: TriggerCondition(
+                type: .geofenceEnter, subject: "home", locationAlias: "home",
+                requiresPermission: [.notifications, .location]
+            ),
+            confidence: 0.88
+        )
+        let result = NotificationPlanner.plan(
+            for: reminder,
+            context: NudgeDecisionContext(allReminders: [reminder], settings: settings)
+        )
+        XCTAssertEqual(result.status, .missingLocationAlias)
+    }
+
+    func testCooldownScopedToSubject() {
+        let now = fixedDate(hour: 10)
+        let homeCondition = TriggerCondition(
+            type: .geofenceEnter, subject: "home", locationAlias: "home",
+            requiresPermission: [.notifications, .location], cooldownSeconds: 3600
+        )
+        let workCondition = TriggerCondition(
+            type: .geofenceEnter, subject: "work", locationAlias: "work",
+            requiresPermission: [.notifications, .location], cooldownSeconds: 3600
+        )
+        // Home enter fired 30 minutes ago — within cooldown.
+        let log: [TriggerEventLog] = [
+            TriggerEventLog(triggerType: .geofenceEnter, subject: "home",
+                            reminderId: UUID(), confidence: 1.0,
+                            createdAt: now.addingTimeInterval(-30 * 60), fired: true)
+        ]
+        let homeEvent = TriggerEvent(type: .geofenceEnter, subject: "home", confidence: 1.0, createdAt: now)
+        let workEvent = TriggerEvent(type: .geofenceEnter, subject: "work", confidence: 1.0, createdAt: now)
+
+        XCTAssertFalse(TriggerExecutionPolicy.shouldFire(
+            condition: homeCondition, event: homeEvent, eventLog: log, now: now),
+            "Home should be blocked by cooldown")
+        XCTAssertTrue(TriggerExecutionPolicy.shouldFire(
+            condition: workCondition, event: workEvent, eventLog: log, now: now),
+            "Work should NOT be blocked — different subject")
+    }
+
+    func testMissingAliasProducesMissingLocationAlias() {
+        var settings = AppSettings()
+        settings.permissionStates = [
+            PermissionState(permission: .notifications, status: .granted),
+            PermissionState(permission: .location, status: .granted)
+        ]
+        settings.locationAliases = [] // no aliases
+        var reminder = Reminder(text: "Check mail", category: .home)
+        reminder.kind = .eventBased
+        reminder.triggerDefinition = ReminderTrigger(
+            condition: TriggerCondition(
+                type: .geofenceEnter, subject: "home", locationAlias: "home",
+                requiresPermission: [.notifications, .location]
+            ),
+            confidence: 0.88
+        )
+        let result = NotificationPlanner.plan(
+            for: reminder,
+            context: NudgeDecisionContext(allReminders: [reminder], settings: settings)
+        )
+        XCTAssertEqual(result.status, .missingLocationAlias)
+        XCTAssertFalse(result.explanation.text.isEmpty)
+    }
+
+    func testGeofenceEnterEventDoesNotMatchWrongAlias() {
+        var settings = AppSettings()
+        settings.permissionStates = [
+            PermissionState(permission: .notifications, status: .granted),
+            PermissionState(permission: .location, status: .granted)
+        ]
+        settings.locationAliases = [
+            LocationAlias(name: "home", latitude: 41.0, longitude: 29.0),
+            LocationAlias(name: "work", latitude: 41.1, longitude: 29.1)
+        ]
+        var homeReminder = Reminder(text: "Check mail", category: .home)
+        homeReminder.kind = .eventBased
+        homeReminder.triggerDefinition = ReminderTrigger(
+            condition: TriggerCondition(
+                type: .geofenceEnter, subject: "home", locationAlias: "home",
+                requiresPermission: [.notifications, .location], cooldownSeconds: 3600
+            ),
+            confidence: 0.88
+        )
+        // Fire a work enter event — home reminder should NOT match.
+        let workEvent = TriggerEvent(type: .geofenceEnter, subject: "work", confidence: 1.0, createdAt: fixedDate(hour: 9))
+        let result = NotificationPlanner.plan(
+            for: homeReminder,
+            context: NudgeDecisionContext(allReminders: [homeReminder], settings: settings,
+                                          now: fixedDate(hour: 9), triggeredBy: workEvent)
+        )
+        XCTAssertNotEqual(result.status, .scheduled, "Home reminder must not fire for a work enter event")
+    }
+
     private func reminder(from parsed: ParsedReminderIntent) -> Reminder {
         var reminder = Reminder(text: parsed.reminderText, category: parsed.category)
         reminder.kind = parsed.kind

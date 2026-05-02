@@ -28,7 +28,7 @@ final class NotificationScheduler: NSObject, UNUserNotificationCenterDelegate {
 
     // ── MARK: Permission ──────────────────────────────────────────────────────
 
-    static func requestID(for reminderId: UUID) -> String {
+    nonisolated static func requestID(for reminderId: UUID) -> String {
         "JGR_REMINDER_\(reminderId.uuidString)"
     }
 
@@ -121,13 +121,12 @@ final class NotificationScheduler: NSObject, UNUserNotificationCenterDelegate {
 
     // ── MARK: UNUserNotificationCenterDelegate ────────────────────────────────
 
-    // Show notifications even when app is in foreground (as a banner).
+    // Show notifications even when app is in foreground.
     nonisolated func userNotificationCenter(
         _ center: UNUserNotificationCenter,
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
-        // We handle in-app nudges ourselves; suppress system banner when foregrounded.
-        return []
+        return [.banner, .sound]
     }
 
     nonisolated func userNotificationCenter(

@@ -577,7 +577,8 @@ final class ReminderEngineTests: XCTestCase {
     func testClusteringMovesNotificationAwayFromExistingPlan() {
         var settings = AppSettings()
         let now = fixedDate(hour: 8)
-        var existing = Reminder(text: "Walk", category: .move)
+        var existing = Reminder(text: "urgent walk", category: .move)
+        existing.schedule = ReminderSchedule(cadence: .daily, preferredWindow: nil, dailyCap: 1, confidence: 0.95)
         let second = Reminder(text: "Drink water", category: .body)
         let unclustered = NotificationPlanner.plan(for: second, context: NudgeDecisionContext(allReminders: [second], settings: settings, now: now)).plan!
         existing.nextNudgeAt = unclustered.nextFireDate
@@ -587,9 +588,139 @@ final class ReminderEngineTests: XCTestCase {
             context: NudgeDecisionContext(allReminders: [existing, second], settings: settings, now: now)
         )
 
-        XCTAssertEqual(secondPlan.status, .scheduled)
-        XCTAssertEqual(secondPlan.explanation.code, .notificationClusterPrevented)
+        XCTAssertEqual(secondPlan.status, .clustered)
+        XCTAssertEqual(secondPlan.explanation.code, .delayedDueToAnotherReminder)
         XCTAssertGreaterThanOrEqual(abs(secondPlan.plan!.nextFireDate.timeIntervalSince(existing.nextNudgeAt!)), AdaptiveEngine.clusterGapSeconds)
+    }
+
+    func testMultipleRelativeRemindersInSameWindowArePrioritizedAndStaggered() {
+        let now = fixedDate(hour: 9)
+        var settings = AppSettings()
+        settings.permissionStates = [PermissionState(permission: .notifications, status: .granted)]
+        var urgent = reminder(from: ReminderUnderstandingEngine.parse("20 dakika sonra acil raporu gönder", now: now))
+        var normal = reminder(from: ReminderUnderstandingEngine.parse("20 dakika sonra su iç", now: now))
+
+        let urgentPlan = NotificationPlanner.plan(for: urgent, context: NudgeDecisionContext(allReminders: [urgent], settings: settings, now: now))
+        apply(urgentPlan, to: &urgent)
+        let normalPlan = NotificationPlanner.plan(for: normal, context: NudgeDecisionContext(allReminders: [urgent, normal], settings: settings, now: now))
+        apply(normalPlan, to: &normal)
+
+        XCTAssertEqual(urgentPlan.status, .scheduled)
+        XCTAssertEqual(normalPlan.status, .clustered)
+        XCTAssertEqual(normalPlan.explanation.code, .delayedDueToAnotherReminder)
+        XCTAssertGreaterThanOrEqual(normal.nextNudgeAt!.timeIntervalSince(urgent.nextNudgeAt!), AdaptiveEngine.clusterGapSeconds)
+        XCTAssertNotNil(normal.schedule?.conflictGroupKey)
+    }
+
+    func testHomeArrivalTriggerCollisionsAreStaggered() {
+        let now = fixedDate(hour: 18)
+        var settings = AppSettings()
+        settings.permissionStates = [
+            PermissionState(permission: .notifications, status: .granted),
+            PermissionState(permission: .location, status: .granted)
+        ]
+        settings.locationAliases = [LocationAlias(name: "home", latitude: 41, longitude: 29)]
+        var urgent = reminder(from: ReminderUnderstandingEngine.parse("Eve gelince acil fırını kapat", now: now))
+        var normal = reminder(from: ReminderUnderstandingEngine.parse("Eve gelince çöpleri çıkar", now: now))
+        let event = TriggerEvent(type: .geofenceEnter, subject: "home", confidence: 1, createdAt: now)
+
+        let urgentPlan = NotificationPlanner.plan(for: urgent, context: NudgeDecisionContext(allReminders: [urgent, normal], settings: settings, now: now, triggeredBy: event))
+        apply(urgentPlan, to: &urgent)
+        let normalPlan = NotificationPlanner.plan(for: normal, context: NudgeDecisionContext(allReminders: [urgent, normal], settings: settings, now: now, triggeredBy: event))
+        apply(normalPlan, to: &normal)
+
+        XCTAssertEqual(urgentPlan.status, .scheduled)
+        XCTAssertEqual(normalPlan.status, .clustered)
+        XCTAssertEqual(normalPlan.explanation.code, .delayedDueToAnotherReminder)
+        XCTAssertGreaterThanOrEqual(normal.nextNudgeAt!.timeIntervalSince(urgent.nextNudgeAt!), AdaptiveEngine.clusterGapSeconds)
+    }
+
+    func testHighConfidenceWinsOverLowConfidenceConflict() {
+        let now = fixedDate(hour: 9)
+        var settings = AppSettings()
+        var high = Reminder(text: "Take medicine", category: .health)
+        high.schedule = ReminderSchedule(cadence: .oneOff, preferredWindow: nil, dailyCap: 1, confidence: 0.95, exactDate: now.addingTimeInterval(20 * 60), schedulingPolicy: .relativeOffset)
+        high.nextNudgeAt = now.addingTimeInterval(20 * 60)
+        var low = Reminder(text: "Maybe stretch", category: .move)
+        low.schedule = ReminderSchedule(cadence: .oneOff, preferredWindow: nil, dailyCap: 1, confidence: 0.45, exactDate: now.addingTimeInterval(20 * 60), confidenceTier: .medium, schedulingPolicy: .relativeOffset)
+
+        let lowPlan = NotificationPlanner.plan(for: low, context: NudgeDecisionContext(allReminders: [high, low], settings: settings, now: now))
+
+        XCTAssertEqual(lowPlan.status, .clustered)
+        XCTAssertEqual(lowPlan.explanation.code, .delayedDueToAnotherReminder)
+        XCTAssertGreaterThanOrEqual(lowPlan.plan!.nextFireDate.timeIntervalSince(high.nextNudgeAt!), AdaptiveEngine.clusterGapSeconds)
+    }
+
+    func testUrgentReminderBeatsLowPriorityReminder() {
+        let now = fixedDate(hour: 9)
+        var settings = AppSettings()
+        var normal = Reminder(text: "Read article", category: .mind)
+        normal.schedule = ReminderSchedule(cadence: .oneOff, preferredWindow: nil, dailyCap: 1, confidence: 0.8, exactDate: now.addingTimeInterval(20 * 60), schedulingPolicy: .relativeOffset)
+        normal.nextNudgeAt = now.addingTimeInterval(20 * 60)
+        var urgent = Reminder(text: "urgent call doctor", category: .health)
+        urgent.schedule = ReminderSchedule(cadence: .oneOff, preferredWindow: nil, dailyCap: 1, confidence: 0.8, exactDate: now.addingTimeInterval(20 * 60), schedulingPolicy: .relativeOffset)
+
+        let urgentPlan = NotificationPlanner.plan(for: urgent, context: NudgeDecisionContext(allReminders: [normal, urgent], settings: settings, now: now))
+
+        XCTAssertEqual(urgentPlan.status, .scheduled)
+        XCTAssertNotEqual(urgentPlan.explanation.code, .delayedDueToAnotherReminder)
+    }
+
+    func testQuietHoursAndConflictResolveTogether() {
+        let now = fixedDate(hour: 22, minute: 50)
+        var settings = AppSettings()
+        settings.quietHoursStart = 23
+        settings.quietHoursEnd = 8
+        var urgent = Reminder(text: "urgent medicine", category: .health)
+        urgent.schedule = ReminderSchedule(cadence: .oneOff, preferredWindow: NudgeTimeWindow(startHour: 23, endHour: 23, label: .night), dailyCap: 1, confidence: 0.9)
+        var normal = Reminder(text: "Read", category: .mind)
+        normal.schedule = ReminderSchedule(cadence: .oneOff, preferredWindow: NudgeTimeWindow(startHour: 23, endHour: 23, label: .night), dailyCap: 1, confidence: 0.7)
+
+        let urgentPlan = NotificationPlanner.plan(for: urgent, context: NudgeDecisionContext(allReminders: [urgent], settings: settings, now: now))
+        apply(urgentPlan, to: &urgent)
+        let normalPlan = NotificationPlanner.plan(for: normal, context: NudgeDecisionContext(allReminders: [urgent, normal], settings: settings, now: now))
+
+        XCTAssertEqual(urgentPlan.explanation.code, .quietHoursDelayed)
+        XCTAssertEqual(normalPlan.status, .clustered)
+        XCTAssertEqual(normalPlan.explanation.code, .delayedDueToAnotherReminder)
+        XCTAssertGreaterThanOrEqual(normalPlan.plan!.nextFireDate.timeIntervalSince(urgent.nextNudgeAt!), AdaptiveEngine.clusterGapSeconds)
+    }
+
+    func testRepeatedReplansDoNotKeepPushingDelayedReminderLater() {
+        let now = fixedDate(hour: 9)
+        var settings = AppSettings()
+        var anchor = Reminder(text: "urgent walk", category: .move)
+        anchor.schedule = ReminderSchedule(cadence: .oneOff, preferredWindow: nil, dailyCap: 1, confidence: 0.95, exactDate: now.addingTimeInterval(20 * 60), schedulingPolicy: .relativeOffset)
+        anchor.nextNudgeAt = now.addingTimeInterval(20 * 60)
+        var delayed = Reminder(text: "Drink water", category: .body)
+        delayed.schedule = ReminderSchedule(cadence: .oneOff, preferredWindow: nil, dailyCap: 1, confidence: 0.7, exactDate: now.addingTimeInterval(20 * 60), schedulingPolicy: .relativeOffset)
+
+        let firstPlan = NotificationPlanner.plan(for: delayed, context: NudgeDecisionContext(allReminders: [anchor, delayed], settings: settings, now: now))
+        apply(firstPlan, to: &delayed)
+        let firstDate = delayed.nextNudgeAt
+        let secondPlan = NotificationPlanner.plan(for: delayed, context: NudgeDecisionContext(allReminders: [anchor, delayed], settings: settings, now: now.addingTimeInterval(60)))
+
+        XCTAssertEqual(secondPlan.status, .clustered)
+        XCTAssertEqual(secondPlan.plan?.nextFireDate, firstDate)
+    }
+
+    func testRelaunchStyleReconciliationPreservesResolvedStaggerOrder() {
+        let now = fixedDate(hour: 9)
+        var settings = AppSettings()
+        var anchor = Reminder(text: "urgent walk", category: .move)
+        anchor.schedule = ReminderSchedule(cadence: .oneOff, preferredWindow: nil, dailyCap: 1, confidence: 0.95, exactDate: now.addingTimeInterval(20 * 60), schedulingPolicy: .relativeOffset)
+        anchor.nextNudgeAt = now.addingTimeInterval(20 * 60)
+        var delayed = Reminder(text: "Drink water", category: .body)
+        delayed.schedule = ReminderSchedule(cadence: .oneOff, preferredWindow: nil, dailyCap: 1, confidence: 0.7, exactDate: now.addingTimeInterval(20 * 60), schedulingPolicy: .relativeOffset)
+
+        let delayedPlan = NotificationPlanner.plan(for: delayed, context: NudgeDecisionContext(allReminders: [anchor, delayed], settings: settings, now: now))
+        apply(delayedPlan, to: &delayed)
+        let restored = delayed
+        let restoredPlan = NotificationPlanner.plan(for: restored, context: NudgeDecisionContext(allReminders: [anchor, restored], settings: settings, now: now.addingTimeInterval(120)))
+
+        XCTAssertEqual(restoredPlan.status, .clustered)
+        XCTAssertEqual(restoredPlan.plan?.nextFireDate, delayed.nextNudgeAt)
+        XCTAssertEqual(restoredPlan.conflictResolvedRank, delayed.schedule?.conflictResolvedRank)
     }
 
     func testSocialReminderChoosesEveningWithExplanation() {
@@ -937,6 +1068,24 @@ final class ReminderEngineTests: XCTestCase {
             schedulingPolicy: parsed.schedulingPolicy
         )
         return reminder
+    }
+
+    private func apply(_ result: NudgePlanResult, to reminder: inout Reminder) {
+        reminder.schedule?.lastPlanStatus = result.status
+        reminder.schedule?.lastExplanation = result.explanation
+        reminder.schedule?.confidence = result.confidence
+        guard let plan = result.plan else {
+            reminder.nextNudgeAt = nil
+            return
+        }
+        reminder.nextNudgeAt = plan.nextFireDate
+        reminder.schedule?.preferredWindow = plan.window
+        reminder.schedule?.lastPlannedAt = fixedDate(hour: 9)
+        reminder.schedule?.conflictGroupKey = result.conflictGroupKey
+        reminder.schedule?.conflictAnchorReminderId = result.conflictAnchorReminderId
+        reminder.schedule?.conflictResolvedFireDate = result.conflictGroupKey == nil ? nil : plan.nextFireDate
+        reminder.schedule?.conflictResolvedRank = result.conflictResolvedRank
+        reminder.schedule?.conflictResolvedAt = result.conflictResolvedAt
     }
 
     private func settingsForPlanning(parsed: ParsedReminderIntent) -> AppSettings {

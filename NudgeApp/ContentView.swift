@@ -184,20 +184,30 @@ final class AppState: ObservableObject {
     func checkForDueNudges() {
         guard activeNudge == nil else { return }   // already showing one
 
-        for reminder in reminders {
-            guard let due = reminder.nextNudgeAt, due <= .now else { continue }
+        let context = NudgeDecisionContext(allReminders: reminders, settings: settings)
+        let dueReminders = ReminderConflictCoordinator.orderedDueReminders(reminders, context: context)
+        guard let reminder = dueReminders.first else { return }
+
+        for delayed in dueReminders.dropFirst() {
+            guard let idx = reminders.firstIndex(where: { $0.id == delayed.id }) else { continue }
             let result = NotificationPlanner.plan(
-                for: reminder,
+                for: reminders[idx],
                 context: NudgeDecisionContext(allReminders: reminders, settings: settings)
             )
-            guard result.status == .scheduled else { continue }
-            let body = NotificationPlanner.calmCopy(for: reminder)
-            activeNudge = ActiveNudge(reminderId: reminder.id, body: body, category: reminder.category)
-            // Push next nudge time forward so this doesn't re-fire immediately
-            updateReminder(reminder.id) { r in
-                self.applyPlanResult(result, to: &r)
+            if result.plan != nil {
+                applyPlanResult(result, to: &reminders[idx])
             }
-            break
+        }
+
+        let result = NotificationPlanner.plan(
+            for: reminder,
+            context: NudgeDecisionContext(allReminders: reminders, settings: settings)
+        )
+        guard result.plan != nil else { return }
+        let body = NotificationPlanner.calmCopy(for: reminder)
+        activeNudge = ActiveNudge(reminderId: reminder.id, body: body, category: reminder.category)
+        updateReminder(reminder.id) { r in
+            self.applyPlanResult(result, to: &r)
         }
     }
 
@@ -502,14 +512,17 @@ final class AppState: ObservableObject {
 
     func recordTriggerEvent(_ event: TriggerEvent) {
         var changedReminderIds: [UUID] = []
-        for idx in reminders.indices {
-            guard let trigger = reminders[idx].triggerDefinition else { continue }
-            guard TriggerExecutionPolicy.shouldFire(
+        let matchingIndices = reminders.indices.filter { idx in
+            guard let trigger = reminders[idx].triggerDefinition else { return false }
+            return TriggerExecutionPolicy.shouldFire(
                 condition: trigger.condition,
                 event: event,
                 eventLog: settings.triggerEventLog,
                 now: event.createdAt
-            ) else { continue }
+            )
+        }
+
+        for idx in matchingIndices {
 
             let result = NotificationPlanner.plan(
                 for: reminders[idx],
@@ -623,6 +636,11 @@ final class AppState: ObservableObject {
         reminder.nextNudgeAt = plan.nextFireDate
         reminder.schedule?.preferredWindow = plan.window
         reminder.schedule?.lastPlannedAt = .now
+        reminder.schedule?.conflictGroupKey = result.conflictGroupKey
+        reminder.schedule?.conflictAnchorReminderId = result.conflictAnchorReminderId
+        reminder.schedule?.conflictResolvedFireDate = result.conflictGroupKey == nil ? nil : plan.nextFireDate
+        reminder.schedule?.conflictResolvedRank = result.conflictResolvedRank
+        reminder.schedule?.conflictResolvedAt = result.conflictResolvedAt
         if recordHistory {
             settings.nudgeHistory.append(NudgeHistory(reminderId: reminder.id, plannedAt: plan.nextFireDate))
         }

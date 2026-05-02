@@ -920,6 +920,187 @@ enum CadenceController {
     }
 }
 
+enum ReminderPriorityScorer {
+    static func score(reminder: Reminder, candidateDate: Date, context: NudgeDecisionContext) -> Double {
+        let normalized = TriggerParser.normalize(reminder.text)
+        var score = 0.2
+
+        if normalized.contains("urgent") || normalized.contains("asap") || normalized.contains("acil") {
+            score += 0.35
+        }
+
+        score += min(0.25, (reminder.schedule?.confidence ?? reminder.triggerDefinition?.confidence ?? 0.4) * 0.25)
+
+        let distance = candidateDate.timeIntervalSince(context.now)
+        if distance <= 0 {
+            score += 0.22
+        } else {
+            score += max(0, 1 - min(distance, 3600) / 3600) * 0.18
+        }
+
+        if let event = context.triggeredBy,
+           let condition = reminder.triggerDefinition?.condition,
+           TriggerExecutionPolicy.matches(event, condition: condition) {
+            score += 0.28
+        }
+
+        let recentFatigue = reminder.interactions.suffix(5).reduce(0.0) { partial, interaction in
+            switch interaction.type {
+            case .completed: return partial
+            case .skipped: return partial + 0.07
+            case .ignored: return partial + 0.12
+            }
+        }
+        score -= min(0.3, recentFatigue)
+
+        let categoryKey = reminder.category.rawValue
+        score -= min(0.25, Double(context.settings.userRhythmProfile.mistimingStreakByCategory[categoryKey] ?? 0) * 0.05)
+
+        let hour = Calendar.current.component(.hour, from: candidateDate)
+        let rhythmScore = context.settings.userRhythmProfile.preferredHoursByCategory[categoryKey]?[hour] ?? 0
+        score += max(-0.15, min(0.15, rhythmScore * 0.12))
+
+        return score
+    }
+}
+
+enum ReminderConflictCoordinator {
+    struct Resolution: Hashable {
+        var date: Date
+        var status: NudgePlanStatus
+        var explanationCode: NudgeExplanationCode
+        var explanationText: String
+        var groupKey: String?
+        var anchorReminderId: UUID?
+        var rank: Int?
+        var resolvedAt: Date?
+    }
+
+    static let conflictWindowSeconds: TimeInterval = 15 * 60
+    static let staggerSeconds: TimeInterval = AdaptiveEngine.clusterGapSeconds
+
+    static func resolve(
+        reminder: Reminder,
+        candidateDate: Date,
+        context: NudgeDecisionContext,
+        explanationCode: NudgeExplanationCode,
+        explanationText: String
+    ) -> Resolution {
+        let groupKey = key(for: reminder, candidateDate: candidateDate, context: context)
+
+        if let schedule = reminder.schedule,
+           schedule.conflictGroupKey == groupKey,
+           let resolvedDate = schedule.conflictResolvedFireDate,
+           let rank = schedule.conflictResolvedRank,
+           resolvedDate >= context.now.addingTimeInterval(-60) {
+            return Resolution(
+                date: resolvedDate,
+                status: rank == 0 ? .scheduled : .clustered,
+                explanationCode: rank == 0 ? explanationCode : .delayedDueToAnotherReminder,
+                explanationText: rank == 0 ? explanationText : "Delayed because another reminder was more timely.",
+                groupKey: groupKey,
+                anchorReminderId: schedule.conflictAnchorReminderId,
+                rank: rank,
+                resolvedAt: schedule.conflictResolvedAt ?? context.now
+            )
+        }
+
+        let competitors = competingReminders(for: reminder, candidateDate: candidateDate, groupKey: groupKey, context: context)
+        guard competitors.count > 1 else {
+            return Resolution(date: candidateDate, status: .scheduled, explanationCode: explanationCode, explanationText: explanationText, groupKey: nil, anchorReminderId: nil, rank: nil, resolvedAt: nil)
+        }
+
+        let ranked = competitors.sorted { lhs, rhs in
+            let lhsScore = ReminderPriorityScorer.score(reminder: lhs.reminder, candidateDate: lhs.date, context: context)
+            let rhsScore = ReminderPriorityScorer.score(reminder: rhs.reminder, candidateDate: rhs.date, context: context)
+            if lhsScore == rhsScore {
+                return lhs.reminder.id.uuidString < rhs.reminder.id.uuidString
+            }
+            return lhsScore > rhsScore
+        }
+
+        guard let rank = ranked.firstIndex(where: { $0.reminder.id == reminder.id }) else {
+            return Resolution(date: candidateDate, status: .scheduled, explanationCode: explanationCode, explanationText: explanationText, groupKey: nil, anchorReminderId: nil, rank: nil, resolvedAt: nil)
+        }
+
+        let anchorDate = firstNonQuietDate(after: ranked[0].date, settings: context.settings)
+        let resolved = firstNonQuietDate(after: anchorDate.addingTimeInterval(TimeInterval(rank) * staggerSeconds), settings: context.settings)
+        let anchorId = ranked[0].reminder.id
+        if rank == 0 {
+            return Resolution(date: resolved, status: .scheduled, explanationCode: explanationCode, explanationText: explanationText, groupKey: groupKey, anchorReminderId: anchorId, rank: 0, resolvedAt: context.now)
+        }
+
+        return Resolution(
+            date: resolved,
+            status: .clustered,
+            explanationCode: .delayedDueToAnotherReminder,
+            explanationText: "Delayed because another reminder was more timely.",
+            groupKey: groupKey,
+            anchorReminderId: anchorId,
+            rank: rank,
+            resolvedAt: context.now
+        )
+    }
+
+    static func orderedDueReminders(_ reminders: [Reminder], context: NudgeDecisionContext) -> [Reminder] {
+        reminders
+            .filter { !$0.isDone && ($0.nextNudgeAt ?? .distantFuture) <= context.now }
+            .sorted { lhs, rhs in
+                let lhsDate = lhs.nextNudgeAt ?? context.now
+                let rhsDate = rhs.nextNudgeAt ?? context.now
+                let lhsScore = ReminderPriorityScorer.score(reminder: lhs, candidateDate: lhsDate, context: context)
+                let rhsScore = ReminderPriorityScorer.score(reminder: rhs, candidateDate: rhsDate, context: context)
+                if lhsScore == rhsScore { return lhsDate < rhsDate }
+                return lhsScore > rhsScore
+            }
+    }
+
+    private struct Competitor {
+        var reminder: Reminder
+        var date: Date
+    }
+
+    private static func competingReminders(for reminder: Reminder, candidateDate: Date, groupKey: String, context: NudgeDecisionContext) -> [Competitor] {
+        var competitors = [Competitor(reminder: reminder, date: candidateDate)]
+        for other in context.allReminders where other.id != reminder.id && !other.isDone {
+            if let event = context.triggeredBy,
+               let condition = other.triggerDefinition?.condition,
+               TriggerExecutionPolicy.matches(event, condition: condition) {
+                competitors.append(Competitor(reminder: other, date: event.createdAt.addingTimeInterval(5)))
+                continue
+            }
+            if let otherKey = other.schedule?.conflictGroupKey, otherKey == groupKey, let date = other.schedule?.conflictResolvedFireDate ?? other.nextNudgeAt {
+                competitors.append(Competitor(reminder: other, date: date))
+                continue
+            }
+            guard let date = other.nextNudgeAt else { continue }
+            if abs(date.timeIntervalSince(candidateDate)) < conflictWindowSeconds {
+                competitors.append(Competitor(reminder: other, date: date))
+            }
+        }
+        return competitors
+    }
+
+    private static func key(for reminder: Reminder, candidateDate: Date, context: NudgeDecisionContext) -> String {
+        if let event = context.triggeredBy {
+            return "event:\(event.type.rawValue):\(event.subject ?? ""):\(Int(event.createdAt.timeIntervalSince1970 / conflictWindowSeconds))"
+        }
+        let bucket = Int(candidateDate.timeIntervalSince1970 / conflictWindowSeconds)
+        return "time:\(bucket)"
+    }
+
+    private static func firstNonQuietDate(after date: Date, settings: AppSettings) -> Date {
+        let calendar = Calendar.current
+        var candidate = date
+        for _ in 0..<48 {
+            let hour = calendar.component(.hour, from: candidate)
+            if !AdaptiveEngine.isQuiet(hour: hour, settings: settings) { return candidate }
+            candidate = calendar.date(byAdding: .hour, value: 1, to: candidate) ?? candidate.addingTimeInterval(3600)
+        }
+        return candidate
+    }
+}
+
 enum NotificationPlanner {
     struct TimingScore: Hashable {
         var hour: Int
@@ -997,7 +1178,8 @@ enum NotificationPlanner {
                 reminder: reminder,
                 date: fireDate,
                 selected: (window: nowWindow, confidence: 0.9, explanation: .triggeredByEvent),
-                explanation: .triggeredByEvent
+                explanation: .triggeredByEvent,
+                context: context
             )
         }
 
@@ -1017,7 +1199,7 @@ enum NotificationPlanner {
                 context: context,
                 minimumOffset: 48 * 3600
             )
-            return scheduled(reminder: reminder, date: date, selected: selectedWindow(for: reminder, settings: settings), explanation: .recentMistimedEasedBack)
+            return scheduled(reminder: reminder, date: date, selected: selectedWindow(for: reminder, settings: settings), explanation: .recentMistimedEasedBack, context: context)
         }
 
         let selected = selectedWindow(for: reminder, settings: settings)
@@ -1025,16 +1207,16 @@ enum NotificationPlanner {
         let candidateHour = calendar.component(.hour, from: candidate)
         if AdaptiveEngine.isQuiet(hour: candidateHour, settings: settings) {
             let shifted = firstNonQuietDate(after: candidate, settings: settings)
-            return scheduled(reminder: reminder, date: shifted, selected: selected, explanation: .quietHoursDelayed)
+            return scheduled(reminder: reminder, date: shifted, selected: selected, explanation: .quietHoursDelayed, context: context)
         }
 
         if isClustered(candidate, reminder: reminder, allReminders: context.allReminders) {
             let shifted = candidate.addingTimeInterval(AdaptiveEngine.clusterGapSeconds)
-            return scheduled(reminder: reminder, date: firstNonQuietDate(after: shifted, settings: settings), selected: selected, explanation: .notificationClusterPrevented)
+            return scheduled(reminder: reminder, date: firstNonQuietDate(after: shifted, settings: settings), selected: selected, explanation: .notificationClusterPrevented, context: context)
         }
 
         let explanation: NudgeExplanationCode = context.triggeredBy == nil ? selected.explanation : .triggeredByEvent
-        return scheduled(reminder: reminder, date: candidate, selected: selected, explanation: explanation)
+        return scheduled(reminder: reminder, date: candidate, selected: selected, explanation: explanation, context: context)
     }
 
     static func calmCopy(for reminder: Reminder) -> String {
@@ -1105,21 +1287,21 @@ enum NotificationPlanner {
             }
             let window = NudgeTimeWindow.around(hour: Calendar.current.component(.hour, from: date), label: TimeWindowLabel.label(for: Calendar.current.component(.hour, from: date)))
             let text = schedule.grammarExplanation ?? "Scheduled from the parsed time."
-            return scheduled(reminder: reminder, date: date, selected: (window: window, confidence: confidence, explanation: .parsedTimeHint), explanationText: text)
+            return scheduled(reminder: reminder, date: date, selected: (window: window, confidence: confidence, explanation: .parsedTimeHint), explanationText: text, context: context)
         case .approximateWindow:
             guard let window = schedule.preferredWindow ?? schedule.recurrenceRule?.preferredWindow else { return nil }
             let targetDay = schedule.approximateDate ?? context.now
             let widened = schedule.confidenceTier == .medium ? widen(window) : window
             let date = date(in: widened, on: targetDay, after: context.now)
             let text = schedule.grammarExplanation ?? "Scheduled in the parsed time window."
-            return scheduled(reminder: reminder, date: date, selected: (window: widened, confidence: confidence, explanation: .parsedTimeHint), explanationText: text)
+            return scheduled(reminder: reminder, date: date, selected: (window: widened, confidence: confidence, explanation: .parsedTimeHint), explanationText: text, context: context)
         case .recurring:
             guard let rule = schedule.recurrenceRule else { return nil }
             let window = schedule.preferredWindow ?? rule.preferredWindow ?? NudgeTimeWindow.around(hour: reminder.category.defaultHours.first ?? 10, label: .lateMorning)
             let widened = schedule.confidenceTier == .medium ? widen(window) : window
             let date = nextRecurrenceDate(rule: rule, window: widened, reminder: reminder, context: context)
             let text = schedule.grammarExplanation ?? "Scheduled from the parsed recurrence rule."
-            return scheduled(reminder: reminder, date: date, selected: (window: widened, confidence: confidence, explanation: .parsedTimeHint), explanationText: text)
+            return scheduled(reminder: reminder, date: date, selected: (window: widened, confidence: confidence, explanation: .parsedTimeHint), explanationText: text, context: context)
         case .pendingSetup:
             return notScheduled(.needsClarification, .needsClarification, schedule.grammarExplanation ?? "This reminder needs setup before it can run.", confidence: confidence)
         case .unsupported:
@@ -1251,34 +1433,78 @@ enum NotificationPlanner {
         reminder: Reminder,
         date: Date,
         selected: (window: NudgeTimeWindow, confidence: Double, explanation: NudgeExplanationCode),
-        explanation: NudgeExplanationCode
+        explanation: NudgeExplanationCode,
+        context: NudgeDecisionContext? = nil
     ) -> NudgePlanResult {
         let text = explanationText(for: explanation)
+        let resolved: ReminderConflictCoordinator.Resolution
+        if let context {
+            resolved = ReminderConflictCoordinator.resolve(
+                reminder: reminder,
+                candidateDate: date,
+                context: context,
+                explanationCode: explanation,
+                explanationText: text
+            )
+        } else {
+            resolved = ReminderConflictCoordinator.Resolution(date: date, status: .scheduled, explanationCode: explanation, explanationText: text, groupKey: nil, anchorReminderId: nil, rank: nil, resolvedAt: nil)
+        }
         let plan = NudgePlan(
             reminderId: reminder.id,
-            nextFireDate: date,
+            nextFireDate: resolved.date,
             window: selected.window,
             confidence: selected.confidence,
-            explanation: NudgeExplanation(code: explanation, text: text)
+            explanation: NudgeExplanation(code: resolved.explanationCode, text: resolved.explanationText)
         )
-        return NudgePlanResult(status: .scheduled, plan: plan, explanation: plan.explanation, confidence: selected.confidence)
+        return NudgePlanResult(
+            status: resolved.status,
+            plan: plan,
+            explanation: plan.explanation,
+            confidence: selected.confidence,
+            conflictGroupKey: resolved.groupKey,
+            conflictAnchorReminderId: resolved.anchorReminderId,
+            conflictResolvedRank: resolved.rank,
+            conflictResolvedAt: resolved.resolvedAt
+        )
     }
 
     private static func scheduled(
         reminder: Reminder,
         date: Date,
         selected: (window: NudgeTimeWindow, confidence: Double, explanation: NudgeExplanationCode),
-        explanationText: String
+        explanationText: String,
+        context: NudgeDecisionContext? = nil
     ) -> NudgePlanResult {
-        let explanation = NudgeExplanation(code: selected.explanation, text: explanationText)
+        let resolved: ReminderConflictCoordinator.Resolution
+        if let context {
+            resolved = ReminderConflictCoordinator.resolve(
+                reminder: reminder,
+                candidateDate: date,
+                context: context,
+                explanationCode: selected.explanation,
+                explanationText: explanationText
+            )
+        } else {
+            resolved = ReminderConflictCoordinator.Resolution(date: date, status: .scheduled, explanationCode: selected.explanation, explanationText: explanationText, groupKey: nil, anchorReminderId: nil, rank: nil, resolvedAt: nil)
+        }
+        let explanation = NudgeExplanation(code: resolved.explanationCode, text: resolved.explanationText)
         let plan = NudgePlan(
             reminderId: reminder.id,
-            nextFireDate: date,
+            nextFireDate: resolved.date,
             window: selected.window,
             confidence: selected.confidence,
             explanation: explanation
         )
-        return NudgePlanResult(status: .scheduled, plan: plan, explanation: explanation, confidence: selected.confidence)
+        return NudgePlanResult(
+            status: resolved.status,
+            plan: plan,
+            explanation: explanation,
+            confidence: selected.confidence,
+            conflictGroupKey: resolved.groupKey,
+            conflictAnchorReminderId: resolved.anchorReminderId,
+            conflictResolvedRank: resolved.rank,
+            conflictResolvedAt: resolved.resolvedAt
+        )
     }
 
     private static func notScheduled(_ status: NudgePlanStatus, _ code: NudgeExplanationCode, _ text: String, confidence: Double) -> NudgePlanResult {
@@ -1300,6 +1526,7 @@ enum NotificationPlanner {
         case .maybeLaterDelayed: return "Moved later after Maybe Later."
         case .ignoredWindowReduced: return "Reduced confidence for a recently ignored window."
         case .openedPositiveSignal: return "Opened from notification, a mild positive signal."
+        case .delayedDueToAnotherReminder: return "Delayed because another reminder was more timely."
         default: return code.rawValue
         }
     }

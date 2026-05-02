@@ -352,6 +352,11 @@ struct ReminderSchedule: Codable, Hashable {
     var confidenceTier: ReminderConfidenceTier? = nil
     var grammarExplanation: String? = nil
     var schedulingPolicy: ReminderSchedulingPolicy? = nil
+    var conflictGroupKey: String? = nil
+    var conflictAnchorReminderId: UUID? = nil
+    var conflictResolvedFireDate: Date? = nil
+    var conflictResolvedRank: Int? = nil
+    var conflictResolvedAt: Date? = nil
 }
 
 enum NudgePlanStatus: String, Codable, Hashable {
@@ -388,6 +393,7 @@ enum NudgeExplanationCode: String, Codable, Hashable {
     case maybeLaterDelayed
     case ignoredWindowReduced
     case openedPositiveSignal
+    case delayedDueToAnotherReminder
 }
 
 struct NudgeExplanation: Codable, Hashable {
@@ -408,8 +414,12 @@ struct NudgePlanResult: Codable, Hashable {
     var plan: NudgePlan?
     var explanation: NudgeExplanation
     var confidence: Double
+    var conflictGroupKey: String? = nil
+    var conflictAnchorReminderId: UUID? = nil
+    var conflictResolvedRank: Int? = nil
+    var conflictResolvedAt: Date? = nil
 
-    var isScheduled: Bool { status == .scheduled && plan != nil }
+    var isScheduled: Bool { (status == .scheduled || status == .clustered) && plan != nil }
 }
 
 struct NudgeDecisionContext {

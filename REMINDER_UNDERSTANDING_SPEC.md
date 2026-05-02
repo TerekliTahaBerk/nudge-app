@@ -96,6 +96,34 @@ Grammar output directly controls behavior:
 
 Every plan stores an explanation that reflects the grammar interpretation, such as “Scheduled in 20 minutes,” “Scheduled for tomorrow morning,” “Repeats every morning,” or “Laptop triggers need a future companion setup.”
 
+## Conflict Handling
+
+When multiple reminders want the same delivery window, the app resolves the conflict locally and deterministically. The priority score considers urgency words, parser confidence, due proximity, matching event-trigger relevance, recent fatigue, and learned rhythm preference.
+
+Same-window behavior:
+
+- Reminders due within the same 15-minute window compete.
+- The highest-priority reminder keeps the earliest slot.
+- Lower-priority reminders are staggered after it.
+- Delayed reminders use the explanation “Delayed because another reminder was more timely.”
+
+Same-trigger behavior:
+
+- If several reminders match the same event, such as home arrival, gym exit, or charging started, the event is handled as one conflict group.
+- One reminder is scheduled immediately.
+- Remaining matching reminders are staggered instead of all firing at once.
+
+Quiet hours precedence:
+
+- Quiet-hours movement happens before conflict staggering.
+- If multiple reminders resolve to the first non-quiet time, the same priority and stagger rules apply there.
+
+Conflict stability:
+
+- A delayed reminder stores its conflict group key, anchor reminder id, resolved fire date, resolved rank, and resolved-at timestamp.
+- Later planner calls, repeated scheduling, or app relaunch reconciliation reuse the stored resolved slot for the same conflict group.
+- Conflict handling must not create an infinite replan loop or keep pushing the same reminder later.
+
 ## Confidence And Ambiguity
 
 Confidence is composable. It considers:
@@ -128,3 +156,7 @@ Tiers:
 | `Markete gidince süt al` | Market arrival trigger | Pending market alias, no time fallback |
 | `Laptopu açınca raporu gönder` | Unsupported laptop context | Unsupported/pending companion setup, no schedule |
 | `benzinden sonra fişi sakla` | Low-confidence fuel context | Unsupported/fallback with explanation |
+| `20 dakika sonra acil raporu gönder` + `20 dakika sonra su iç` | Same-window conflict | Urgent reminder goes first; water is staggered |
+| Two home-arrival reminders | Same trigger conflict | One fires on arrival; the rest are staggered |
+| Quiet-hours conflict | First non-quiet window conflict | Winner moves to first non-quiet time; others stagger |
+| Repeated schedule/relaunch | Existing conflict metadata | Resolved stagger order is preserved |

@@ -364,7 +364,14 @@ final class AppState: ObservableObject {
             lastExplanation: parsedIntent.explanation,
             lastPlanStatus: nil,
             interpretationSummary: parsedIntent.interpretationSummary,
-            fallbackSummary: parsedIntent.triggerReadiness?.fallbackStrategy?.explanation
+            fallbackSummary: parsedIntent.triggerReadiness?.fallbackStrategy?.explanation,
+            exactDate: parsedIntent.exactDate,
+            approximateDate: parsedIntent.approximateDate,
+            relativeOffsetSeconds: parsedIntent.relativeOffsetSeconds,
+            recurrenceRule: parsedIntent.recurrenceRule,
+            confidenceTier: parsedIntent.confidenceTier,
+            grammarExplanation: parsedIntent.explanation?.text,
+            schedulingPolicy: parsedIntent.schedulingPolicy
         )
         if r.kind == .eventBased || type == .trigger {
             r.triggerDefinition = parsedIntent.trigger ?? trigger.map {
@@ -436,7 +443,14 @@ final class AppState: ObservableObject {
             lastExplanation: parsedIntent.explanation,
             lastPlanStatus: nil,
             interpretationSummary: parsedIntent.interpretationSummary,
-            fallbackSummary: parsedIntent.triggerReadiness?.fallbackStrategy?.explanation
+            fallbackSummary: parsedIntent.triggerReadiness?.fallbackStrategy?.explanation,
+            exactDate: parsedIntent.exactDate,
+            approximateDate: parsedIntent.approximateDate,
+            relativeOffsetSeconds: parsedIntent.relativeOffsetSeconds,
+            recurrenceRule: parsedIntent.recurrenceRule,
+            confidenceTier: parsedIntent.confidenceTier,
+            grammarExplanation: parsedIntent.explanation?.text,
+            schedulingPolicy: parsedIntent.schedulingPolicy
         )
         if reminders[idx].kind == .eventBased || type == .trigger {
             reminders[idx].triggerDefinition = parsedIntent.trigger ?? trigger.map {

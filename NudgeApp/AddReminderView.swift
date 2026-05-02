@@ -314,6 +314,9 @@ struct AddReminderView: View {
             parsedIntent.timeWindow = nil
             parsedIntent.explanation = NudgeExplanation(code: .waitingForTrigger, text: "Waiting for \(existingTrigger.condition.type.rawValue).")
         }
+        let storedText = parsedIntent.reminderText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            ? finalText
+            : parsedIntent.reminderText
         let finalAnalysis = TextAnalysis(
             category: parsedIntent.category,
             suggestedFrequency: frequency,
@@ -331,7 +334,7 @@ struct AddReminderView: View {
         if let editingReminder {
             state.editReminder(
                 id: editingReminder.id,
-                text: finalText,
+                text: storedText,
                 analysis: finalAnalysis,
                 frequency: resolvedFrequency,
                 isRepeating: resolvedRepeating,
@@ -344,7 +347,7 @@ struct AddReminderView: View {
             )
         } else {
             state.addReminder(
-                text: finalText,
+                text: storedText,
                 analysis: finalAnalysis,
                 frequency: resolvedFrequency,
                 isRepeating: resolvedRepeating,

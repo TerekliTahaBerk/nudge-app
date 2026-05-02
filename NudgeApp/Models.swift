@@ -170,6 +170,51 @@ enum RecurrenceExpectation: String, Codable, Hashable {
     case eventDriven = "event_driven"
 }
 
+enum ReminderConfidenceTier: String, Codable, Hashable {
+    case high
+    case medium
+    case low
+}
+
+enum ReminderSchedulingPolicy: String, Codable, Hashable {
+    case adaptive
+    case exactDate = "exact_date"
+    case relativeOffset = "relative_offset"
+    case approximateWindow = "approximate_window"
+    case recurring
+    case eventTrigger = "event_trigger"
+    case pendingSetup = "pending_setup"
+    case unsupported
+}
+
+struct ReminderRecurrenceRule: Codable, Hashable, Equatable {
+    enum Unit: String, Codable, Hashable {
+        case day
+        case week
+        case month
+    }
+
+    var unit: Unit
+    var interval: Int
+    var timesPerUnit: Int?
+    var preferredWindow: NudgeTimeWindow?
+    var sourcePhrase: String
+
+    init(
+        unit: Unit,
+        interval: Int = 1,
+        timesPerUnit: Int? = nil,
+        preferredWindow: NudgeTimeWindow? = nil,
+        sourcePhrase: String
+    ) {
+        self.unit = unit
+        self.interval = max(1, interval)
+        self.timesPerUnit = timesPerUnit
+        self.preferredWindow = preferredWindow
+        self.sourcePhrase = sourcePhrase
+    }
+}
+
 enum ReminderAmbiguityFlag: String, Codable, Hashable {
     case missingLocationAlias = "missing_location_alias"
     case unsupportedTrigger = "unsupported_trigger"
@@ -300,6 +345,13 @@ struct ReminderSchedule: Codable, Hashable {
     var lastPlanStatus: NudgePlanStatus? = nil
     var interpretationSummary: String? = nil
     var fallbackSummary: String? = nil
+    var exactDate: Date? = nil
+    var approximateDate: Date? = nil
+    var relativeOffsetSeconds: TimeInterval? = nil
+    var recurrenceRule: ReminderRecurrenceRule? = nil
+    var confidenceTier: ReminderConfidenceTier? = nil
+    var grammarExplanation: String? = nil
+    var schedulingPolicy: ReminderSchedulingPolicy? = nil
 }
 
 enum NudgePlanStatus: String, Codable, Hashable {

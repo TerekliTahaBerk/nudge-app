@@ -27,6 +27,18 @@ struct ParsedReminderIntent: Codable, Equatable {
     var ambiguityFlags: [ReminderAmbiguityFlag] = []
     var interpretationSummary: String = ""
     var triggerReadiness: TriggerReadiness?
+    var exactDate: Date? = nil
+    var approximateDate: Date? = nil
+    var approximateWindow: NudgeTimeWindow? = nil
+    var relativeOffsetSeconds: TimeInterval? = nil
+    var recurrenceRule: ReminderRecurrenceRule? = nil
+    var pendingLocationAlias: String? = nil
+    var schedulingPolicy: ReminderSchedulingPolicy = .adaptive
+    var confidenceTier: ReminderConfidenceTier = .medium
+    var grammarClauses: ReminderGrammarClauses = ReminderGrammarClauses()
+#if DEBUG
+    var confidenceBreakdown: [String: Double] = [:]
+#endif
 }
 
 struct TriggerReadiness: Codable, Equatable {
@@ -37,6 +49,456 @@ struct TriggerReadiness: Codable, Equatable {
     var isCurrentlyActionable: Bool
     var fallbackStrategy: FallbackStrategy?
     var explanation: String
+}
+
+struct ReminderGrammarClauses: Codable, Equatable, Hashable {
+    var triggerClause: String?
+    var actionClause: String?
+    var timeClause: String?
+    var recurrenceClause: String?
+    var placeClause: String?
+    var deviceContextClause: String?
+}
+
+struct ParsedTimeExpression: Equatable, Hashable {
+    var exactDate: Date?
+    var approximateDate: Date?
+    var approximateWindow: NudgeTimeWindow?
+    var relativeOffsetSeconds: TimeInterval?
+    var sourcePhrase: String
+    var explanation: String
+    var confidence: Double
+}
+
+struct ParsedRecurrenceExpression: Equatable, Hashable {
+    var rule: ReminderRecurrenceRule
+    var sourcePhrase: String
+    var explanation: String
+    var confidence: Double
+}
+
+struct ParsedTriggerExpression: Equatable {
+    var result: TriggerParser.Result
+    var sourcePhrase: String
+    var placeAlias: String?
+    var pendingLocationAlias: String?
+    var confidenceContribution: Double
+}
+
+struct GrammarParseResult: Equatable {
+    var clauses = ReminderGrammarClauses()
+    var actionText: String?
+    var time: ParsedTimeExpression?
+    var recurrence: ParsedRecurrenceExpression?
+    var trigger: ParsedTriggerExpression?
+    var explanation: String = ""
+}
+
+enum TurkishNormalizer {
+    static let numberWords: [String: Int] = [
+        "bir": 1, "iki": 2, "uc": 3, "üç": 3, "dort": 4, "dört": 4,
+        "bes": 5, "beş": 5, "alti": 6, "altı": 6, "yedi": 7,
+        "sekiz": 8, "dokuz": 9, "on": 10
+    ]
+
+    static func normalize(_ text: String) -> String {
+        text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "tr_TR"))
+            .lowercased()
+            .replacingOccurrences(of: "’", with: "")
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: ",", with: " ")
+            .replacingOccurrences(of: ".", with: " ")
+            .replacingOccurrences(of: "  ", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func tokens(_ text: String) -> [String] {
+        normalize(text).split(separator: " ").map(String.init)
+    }
+
+    static func number(from token: String) -> Int? {
+        Int(token) ?? numberWords[token]
+    }
+}
+
+enum EnglishNormalizer {
+    static func normalize(_ text: String) -> String {
+        text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US"))
+            .lowercased()
+            .replacingOccurrences(of: "'", with: "")
+            .replacingOccurrences(of: "-", with: " ")
+            .replacingOccurrences(of: ",", with: " ")
+            .replacingOccurrences(of: ".", with: " ")
+            .replacingOccurrences(of: "  ", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
+enum ReminderIntentGrammar {
+    static func parse(_ rawText: String, now: Date = .now) -> GrammarParseResult {
+        var result = GrammarParseResult()
+        let text = ReminderInputValidator.sanitize(rawText).trimmingCharacters(in: .whitespacesAndNewlines)
+        var action = text
+
+        if let trigger = PlaceExpressionParser.parse(text) ?? DeviceContextExpressionParser.parse(text) {
+            result.trigger = trigger
+            result.clauses.triggerClause = trigger.sourcePhrase
+            result.clauses.placeClause = trigger.placeAlias
+            if trigger.result.condition.type == .customContext {
+                result.clauses.deviceContextClause = trigger.sourcePhrase
+            }
+            action = removePhrase(trigger.sourcePhrase, from: action)
+        }
+
+        if let recurrence = RecurrenceParser.parse(action, now: now) ?? RecurrenceParser.parse(text, now: now) {
+            result.recurrence = recurrence
+            result.clauses.recurrenceClause = recurrence.sourcePhrase
+            action = removePhrase(recurrence.sourcePhrase, from: action)
+        }
+
+        if let time = TimeExpressionParser.parse(action, now: now) ?? TimeExpressionParser.parse(text, now: now) {
+            result.time = time
+            result.clauses.timeClause = time.sourcePhrase
+            action = removePhrase(time.sourcePhrase, from: action)
+        }
+
+        action = stripReminderPrefix(from: action)
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+        result.actionText = action.isEmpty ? nil : action
+        result.clauses.actionClause = result.actionText
+        result.explanation = [result.trigger?.result.explanation, result.time?.explanation, result.recurrence?.explanation]
+            .compactMap { $0 }
+            .joined(separator: " ")
+        return result
+    }
+
+    static func removePhrase(_ phrase: String, from text: String) -> String {
+        let normalizedText = TurkishNormalizer.normalize(text)
+        let normalizedPhrase = TurkishNormalizer.normalize(phrase)
+        guard let range = normalizedText.range(of: normalizedPhrase) else { return text }
+        let startOffset = normalizedText.distance(from: normalizedText.startIndex, to: range.lowerBound)
+        let endOffset = normalizedText.distance(from: normalizedText.startIndex, to: range.upperBound)
+        let start = text.index(text.startIndex, offsetBy: min(startOffset, text.count))
+        let end = text.index(text.startIndex, offsetBy: min(endOffset, text.count))
+        return String((text[..<start] + " " + text[end...]))
+            .trimmingCharacters(in: CharacterSet.whitespacesAndNewlines.union(.punctuationCharacters))
+    }
+
+    private static func stripReminderPrefix(from text: String) -> String {
+        let normalized = TurkishNormalizer.normalize(text)
+        if ["remind me", "bana hatirlat", "hatirlat"].contains(normalized) {
+            return ""
+        }
+        for prefix in ["remind me to ", "remind me ", "bana hatirlat ", "hatirlat "] where normalized.hasPrefix(prefix) {
+            let idx = text.index(text.startIndex, offsetBy: min(prefix.count, text.count))
+            return String(text[idx...])
+        }
+        return text
+    }
+}
+
+enum TimeExpressionParser {
+    private static let weekdayMap: [String: Int] = [
+        "sunday": 1, "pazar": 1,
+        "monday": 2, "pazartesi": 2,
+        "tuesday": 3, "sali": 3,
+        "wednesday": 4, "carsamba": 4,
+        "thursday": 5, "persembe": 5,
+        "friday": 6, "cuma": 6,
+        "saturday": 7, "cumartesi": 7
+    ]
+
+    static func parse(_ text: String, now: Date = .now) -> ParsedTimeExpression? {
+        let normalized = TurkishNormalizer.normalize(text)
+        let tokens = TurkishNormalizer.tokens(text)
+        let calendar = Calendar.current
+
+        if let offset = relativeOffset(tokens: tokens, normalized: normalized) {
+            let date = now.addingTimeInterval(offset.seconds)
+            return ParsedTimeExpression(
+                exactDate: date,
+                approximateDate: nil,
+                approximateWindow: nil,
+                relativeOffsetSeconds: offset.seconds,
+                sourcePhrase: offset.phrase,
+                explanation: "Scheduled \(offset.display).",
+                confidence: 0.94
+            )
+        }
+
+        if contains(normalized, "yarin sabah") || contains(normalized, "tomorrow morning") {
+            let day = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now
+            return windowResult(day: day, window: morning, phrase: phrase(normalized, original: text, options: ["yarin sabah", "tomorrow morning"]), explanation: "Scheduled for tomorrow morning.")
+        }
+        if contains(normalized, "bugun") || contains(normalized, "today") {
+            return ParsedTimeExpression(exactDate: nil, approximateDate: calendar.startOfDay(for: now), approximateWindow: nil, relativeOffsetSeconds: nil, sourcePhrase: phrase(normalized, original: text, options: ["bugun", "today"]), explanation: "Scheduled for today.", confidence: 0.78)
+        }
+        if contains(normalized, "yarin") || contains(normalized, "tomorrow") {
+            let day = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now
+            return ParsedTimeExpression(exactDate: nil, approximateDate: day, approximateWindow: nil, relativeOffsetSeconds: nil, sourcePhrase: phrase(normalized, original: text, options: ["yarin", "tomorrow"]), explanation: "Scheduled for tomorrow.", confidence: 0.82)
+        }
+        if containsAny(normalized, ["bu aksam", "aksama dogru", "tonight", "this evening"]) || tokens.contains("aksam") {
+            return windowResult(day: calendar.startOfDay(for: now), window: evening, phrase: phrase(normalized, original: text, options: ["bu aksam", "aksama dogru", "tonight", "this evening", "aksam"]), explanation: "Scheduled for this evening.")
+        }
+        if containsAny(normalized, ["ogleden sonra", "afternoon"]) {
+            return windowResult(day: calendar.startOfDay(for: now), window: afternoon, phrase: phrase(normalized, original: text, options: ["ogleden sonra", "afternoon"]), explanation: "Scheduled for the afternoon.")
+        }
+        if containsAny(normalized, ["haftaya", "next week"]) {
+            let day = calendar.date(byAdding: .day, value: 7, to: calendar.startOfDay(for: now)) ?? now
+            return ParsedTimeExpression(exactDate: nil, approximateDate: day, approximateWindow: nil, relativeOffsetSeconds: nil, sourcePhrase: phrase(normalized, original: text, options: ["haftaya", "next week"]), explanation: "Scheduled for next week.", confidence: 0.8)
+        }
+
+        if let weekday = tokens.first(where: { weekdayMap[$0] != nil }), let target = weekdayMap[weekday] {
+            let isNext = normalized.contains("gelecek \(weekday)") || normalized.contains("next \(weekday)")
+            let day = nextWeekday(target, after: now, forceNextWeek: isNext)
+            let source = isNext ? phrase(normalized, original: text, options: ["gelecek \(weekday)", "next \(weekday)"]) : weekday
+            return ParsedTimeExpression(exactDate: nil, approximateDate: calendar.startOfDay(for: day), approximateWindow: nil, relativeOffsetSeconds: nil, sourcePhrase: source, explanation: isNext ? "Scheduled for next \(weekday)." : "Scheduled for \(weekday).", confidence: isNext ? 0.86 : 0.78)
+        }
+
+        return nil
+    }
+
+    private static let morning = NudgeTimeWindow(startHour: 8, endHour: 11, label: .morning)
+    private static let afternoon = NudgeTimeWindow(startHour: 13, endHour: 17, label: .afternoon)
+    private static let evening = NudgeTimeWindow(startHour: 18, endHour: 21, label: .evening)
+
+    private static func relativeOffset(tokens: [String], normalized: String) -> (seconds: TimeInterval, phrase: String, display: String)? {
+        for idx in tokens.indices {
+            guard let amount = TurkishNormalizer.number(from: tokens[idx]), idx + 2 < tokens.count else { continue }
+            let unit = tokens[idx + 1]
+            let marker = tokens[idx + 2]
+            if (unit.hasPrefix("dakika") || unit.hasPrefix("minute")), ["sonra", "later", "minutes"].contains(marker) || normalized.contains("in \(amount) minute") {
+                return (TimeInterval(amount * 60), "\(tokens[idx]) \(unit) \(marker)", "in \(amount) minutes")
+            }
+            if (unit.hasPrefix("saat") || unit.hasPrefix("hour")), ["sonra", "later", "hours"].contains(marker) || normalized.contains("in \(amount) hour") {
+                return (TimeInterval(amount * 3600), "\(tokens[idx]) \(unit) \(marker)", "in \(amount) hours")
+            }
+        }
+        if tokens.count >= 3, tokens[0] == "in", let amount = TurkishNormalizer.number(from: tokens[1]) {
+            let unit = tokens[2]
+            if unit.hasPrefix("minute") { return (TimeInterval(amount * 60), "in \(tokens[1]) \(unit)", "in \(amount) minutes") }
+            if unit.hasPrefix("hour") { return (TimeInterval(amount * 3600), "in \(tokens[1]) \(unit)", "in \(amount) hours") }
+        }
+        return nil
+    }
+
+    private static func windowResult(day: Date, window: NudgeTimeWindow, phrase: String, explanation: String) -> ParsedTimeExpression {
+        ParsedTimeExpression(exactDate: nil, approximateDate: day, approximateWindow: window, relativeOffsetSeconds: nil, sourcePhrase: phrase, explanation: explanation, confidence: 0.88)
+    }
+
+    private static func nextWeekday(_ weekday: Int, after now: Date, forceNextWeek: Bool) -> Date {
+        var components = DateComponents()
+        components.weekday = weekday
+        let calendar = Calendar.current
+        let next = calendar.nextDate(after: now, matching: components, matchingPolicy: .nextTimePreservingSmallerComponents) ?? now
+        if forceNextWeek || calendar.isDate(next, inSameDayAs: now) {
+            return calendar.date(byAdding: .day, value: 7, to: next) ?? next
+        }
+        return next
+    }
+
+    private static func contains(_ normalized: String, _ phrase: String) -> Bool {
+        normalized.contains(phrase)
+    }
+
+    private static func containsAny(_ normalized: String, _ phrases: [String]) -> Bool {
+        phrases.contains { normalized.contains($0) }
+    }
+
+    private static func phrase(_ normalized: String, original: String, options: [String]) -> String {
+        options.first { normalized.contains($0) } ?? original
+    }
+}
+
+enum RecurrenceParser {
+    static func parse(_ text: String, now: Date = .now) -> ParsedRecurrenceExpression? {
+        let normalized = TurkishNormalizer.normalize(text)
+        let tokens = TurkishNormalizer.tokens(text)
+
+        if normalized.contains("her sabah") || normalized.contains("every morning") {
+            let window = NudgeTimeWindow(startHour: 8, endHour: 11, label: .morning)
+            return result(unit: .day, interval: 1, window: window, phrase: normalized.contains("her sabah") ? "her sabah" : "every morning", explanation: "Repeats every morning.")
+        }
+        if normalized.contains("her aksam") || normalized.contains("every evening") {
+            let window = NudgeTimeWindow(startHour: 18, endHour: 21, label: .evening)
+            return result(unit: .day, interval: 1, window: window, phrase: normalized.contains("her aksam") ? "her aksam" : "every evening", explanation: "Repeats every evening.")
+        }
+        if normalized.contains("iki gunde bir") || normalized.contains("every other day") {
+            return result(unit: .day, interval: 2, window: nil, phrase: normalized.contains("iki gunde bir") ? "iki gunde bir" : "every other day", explanation: "Repeats every other day.")
+        }
+        if let weekly = countBefore(tokens: tokens, first: "haftada", second: "kez") ?? countBeforeEnglish(tokens: tokens, unit: "week") {
+            let rule = ReminderRecurrenceRule(unit: .week, interval: 1, timesPerUnit: weekly.count, sourcePhrase: weekly.phrase)
+            return ParsedRecurrenceExpression(rule: rule, sourcePhrase: weekly.phrase, explanation: "Repeats \(weekly.count) times a week.", confidence: 0.9)
+        }
+        if normalized.contains("ayda bir") || normalized.contains("once a month") {
+            return result(unit: .month, interval: 1, window: nil, phrase: normalized.contains("ayda bir") ? "ayda bir" : "once a month", explanation: "Repeats once a month.")
+        }
+        return nil
+    }
+
+    private static func result(unit: ReminderRecurrenceRule.Unit, interval: Int, window: NudgeTimeWindow?, phrase: String, explanation: String) -> ParsedRecurrenceExpression {
+        let rule = ReminderRecurrenceRule(unit: unit, interval: interval, preferredWindow: window, sourcePhrase: phrase)
+        return ParsedRecurrenceExpression(rule: rule, sourcePhrase: phrase, explanation: explanation, confidence: 0.91)
+    }
+
+    private static func countBefore(tokens: [String], first: String, second: String) -> (count: Int, phrase: String)? {
+        guard let idx = tokens.firstIndex(of: first), idx + 2 < tokens.count, let count = TurkishNormalizer.number(from: tokens[idx + 1]), tokens[idx + 2] == second else { return nil }
+        return (count, "\(first) \(tokens[idx + 1]) \(second)")
+    }
+
+    private static func countBeforeEnglish(tokens: [String], unit: String) -> (count: Int, phrase: String)? {
+        guard tokens.count >= 4 else { return nil }
+        for idx in 0...(tokens.count - 4) {
+            if let count = TurkishNormalizer.number(from: tokens[idx]),
+               tokens[idx + 1].hasPrefix("time"),
+               tokens[idx + 2] == "a",
+               tokens[idx + 3].hasPrefix(unit) {
+                return (count, "\(tokens[idx]) \(tokens[idx + 1]) a \(tokens[idx + 3])")
+            }
+        }
+        return nil
+    }
+}
+
+enum PlaceExpressionParser {
+    struct PlacePattern {
+        let aliases: [String]
+        let normalizedAlias: String
+        let displayAlias: String
+        let category: String
+        let type: TriggerType
+        let confidence: Double
+    }
+
+    static func parse(_ text: String) -> ParsedTriggerExpression? {
+        let normalized = TurkishNormalizer.normalize(text)
+        let patterns: [PlacePattern] = [
+            .init(aliases: ["eve gelince", "eve varinca", "eve gidince", "when i get home", "when i arrive home", "when i come home"], normalizedAlias: "home", displayAlias: "Home", category: "home", type: .geofenceEnter, confidence: 0.9),
+            .init(aliases: ["evden cikinca", "evden ayrilinca", "when i leave home"], normalizedAlias: "home", displayAlias: "Home", category: "home", type: .geofenceExit, confidence: 0.88),
+            .init(aliases: ["ise gidince", "ise varinca", "ofise varinca", "when i arrive at work", "when i get to work", "when i arrive at the office"], normalizedAlias: "work", displayAlias: "Work", category: "work", type: .geofenceEnter, confidence: 0.86),
+            .init(aliases: ["isten cikinca", "isten ayrilinca", "ofisten ayrilinca", "when i leave work", "when i leave the office"], normalizedAlias: "work", displayAlias: "Work", category: "work", type: .geofenceExit, confidence: 0.85),
+            .init(aliases: ["spora gidince", "spora varinca", "spor salonuna gidince", "spor salonuna varinca", "when i get to the gym", "when i arrive at the gym"], normalizedAlias: "gym", displayAlias: "Gym", category: "gym", type: .geofenceEnter, confidence: 0.88),
+            .init(aliases: ["spordan cikinca", "spordan ayrilinca", "spor salonundan cikinca", "spor salonundan ayrilinca", "gymden cikinca", "gymden ayrilinca", "when i leave the gym"], normalizedAlias: "gym", displayAlias: "Gym", category: "gym", type: .geofenceExit, confidence: 0.9),
+            .init(aliases: ["markete gidince", "markete varinca", "when i get to the market", "when i arrive at the market"], normalizedAlias: "market", displayAlias: "Market", category: "market", type: .geofenceEnter, confidence: 0.84),
+            .init(aliases: ["marketten cikinca", "marketten ayrilinca", "when i leave the market"], normalizedAlias: "market", displayAlias: "Market", category: "market", type: .geofenceExit, confidence: 0.82),
+            .init(aliases: ["eczaneye gidince", "eczaneye varinca", "when i arrive at the pharmacy", "when i get to the pharmacy"], normalizedAlias: "pharmacy", displayAlias: "Pharmacy", category: "pharmacy", type: .geofenceEnter, confidence: 0.84),
+            .init(aliases: ["eczaneden cikinca", "eczaneden ayrilinca", "when i leave the pharmacy"], normalizedAlias: "pharmacy", displayAlias: "Pharmacy", category: "pharmacy", type: .geofenceExit, confidence: 0.82),
+            .init(aliases: ["okula gidince", "okula varinca", "when i get to school"], normalizedAlias: "school", displayAlias: "School", category: "school", type: .geofenceEnter, confidence: 0.8),
+            .init(aliases: ["ofise gidince", "ofise varinca", "when i get to the office"], normalizedAlias: "office", displayAlias: "Office", category: "office", type: .geofenceEnter, confidence: 0.8),
+            .init(aliases: ["kafeye gidince", "kafeye varinca", "cafeye gidince", "when i get to the cafe"], normalizedAlias: "cafe", displayAlias: "Cafe", category: "cafe", type: .geofenceEnter, confidence: 0.8),
+            .init(aliases: ["doktora gidince", "doktora varinca", "when i get to the doctor"], normalizedAlias: "doctor", displayAlias: "Doctor", category: "doctor", type: .geofenceEnter, confidence: 0.8),
+            .init(aliases: ["hastaneye gidince", "hastaneye varinca", "when i get to the hospital"], normalizedAlias: "hospital", displayAlias: "Hospital", category: "hospital", type: .geofenceEnter, confidence: 0.8)
+        ]
+
+        for pattern in patterns {
+            if let source = pattern.aliases.first(where: { normalized.contains($0) }) {
+                return place(pattern, sourcePhrase: source)
+            }
+        }
+        return nil
+    }
+
+    private static func place(_ pattern: PlacePattern, sourcePhrase: String) -> ParsedTriggerExpression {
+        let metadata = [
+            "actionable": "true",
+            "normalizedAlias": pattern.normalizedAlias,
+            "displayAlias": pattern.displayAlias,
+            "placeCategory": pattern.category,
+            "sourcePhrase": sourcePhrase,
+            "pendingLocationAlias": pattern.normalizedAlias
+        ]
+        let condition = TriggerCondition(
+            type: pattern.type,
+            subject: pattern.normalizedAlias,
+            locationAlias: pattern.normalizedAlias,
+            metadata: metadata,
+            requiresPermission: [.notifications, .location],
+            minimumConfidence: 0.7,
+            cooldownSeconds: 3600
+        )
+        let result = TriggerParser.Result(
+            condition: condition,
+            reminderText: nil,
+            confidence: pattern.confidence,
+            needsClarification: true,
+            clarifyingQuestion: "Where should I remember as \(pattern.displayAlias)?",
+            explanation: pattern.type == .geofenceEnter ? "Understood as: when you arrive at \(pattern.displayAlias)." : "Understood as: when you leave \(pattern.displayAlias)."
+        )
+        return ParsedTriggerExpression(result: result, sourcePhrase: sourcePhrase, placeAlias: pattern.normalizedAlias, pendingLocationAlias: pattern.normalizedAlias, confidenceContribution: 0.2)
+    }
+}
+
+enum DeviceContextExpressionParser {
+    static func parse(_ text: String) -> ParsedTriggerExpression? {
+        let normalized = TurkishNormalizer.normalize(text)
+        if let source = first(in: normalized, ["sarja takinca", "telefonu sarja takinca", "when i plug in", "when charging starts"]) {
+            return event(.chargingStarted, source: source, confidence: 0.92, permissions: [.notifications], explanation: "Understood as: when charging starts.")
+        }
+        if let source = first(in: normalized, ["arabaya binince", "arabama binince", "when i get in my car", "when carplay connects"]) {
+            return event(.carplayConnected, source: source, confidence: 0.82, permissions: [.notifications, .bluetooth], explanation: "Understood as: when you get in the car.")
+        }
+        if let source = first(in: normalized, ["arabadan inince", "arabadan cikinca", "when i leave my car", "when carplay disconnects"]) {
+            return event(.carplayDisconnected, source: source, confidence: 0.82, permissions: [.notifications, .bluetooth], explanation: "Understood as: when you leave the car.")
+        }
+        if let source = first(in: normalized, ["toplantidan sonra", "toplanti bitince", "after my meeting", "after the meeting", "when my meeting ends"]) {
+            return event(.calendarEventEnded, source: source, confidence: 0.74, permissions: [.notifications, .calendar], explanation: "Needs calendar access before it can work.")
+        }
+        if let source = first(in: normalized, ["laptopu acinca", "laptopumu acinca", "bilgisayarimi acinca", "bilgisayarimin kapagini acinca", "when i open my laptop", "open my laptop"]) {
+            let condition = TriggerCondition(
+                type: .customContext,
+                subject: "laptop_opened",
+                metadata: ["fallback": "companion_app_bluetooth_wifi_manual", "actionable": "false", "sourcePhrase": source],
+                requiresPermission: [.notifications, .bluetooth, .localNetwork],
+                minimumConfidence: 0.75
+            )
+            let result = TriggerParser.Result(
+                condition: condition,
+                reminderText: nil,
+                confidence: 0.45,
+                needsClarification: true,
+                clarifyingQuestion: "Laptop triggers need a future companion setup.",
+                explanation: "Laptop triggers need a future companion setup."
+            )
+            return ParsedTriggerExpression(result: result, sourcePhrase: source, placeAlias: nil, pendingLocationAlias: nil, confidenceContribution: -0.25)
+        }
+        if let source = first(in: normalized, ["benzinden sonra", "benzin alinca", "yakit alinca", "when i get gas", "when i buy fuel", "at the gas station"]) {
+            let condition = TriggerCondition(
+                type: .customContext,
+                subject: "fuel_stop",
+                metadata: ["fallback": "gas_station_location_car_bluetooth_confirmation", "actionable": "false", "sourcePhrase": source],
+                requiresPermission: [.notifications, .location, .bluetooth],
+                minimumConfidence: 0.8
+            )
+            let result = TriggerParser.Result(
+                condition: condition,
+                reminderText: nil,
+                confidence: 0.42,
+                needsClarification: true,
+                clarifyingQuestion: "Fuel-stop reminders need confirmation or setup first.",
+                explanation: "Fuel stops are not supported as an automatic local trigger yet."
+            )
+            return ParsedTriggerExpression(result: result, sourcePhrase: source, placeAlias: nil, pendingLocationAlias: nil, confidenceContribution: -0.25)
+        }
+        return nil
+    }
+
+    private static func event(_ type: TriggerType, source: String, confidence: Double, permissions: [PermissionKind], explanation: String) -> ParsedTriggerExpression {
+        let condition = TriggerCondition(
+            type: type,
+            subject: type.rawValue,
+            metadata: ["actionable": "true", "sourcePhrase": source],
+            requiresPermission: permissions,
+            minimumConfidence: 0.65,
+            cooldownSeconds: type == .morningFirstUnlock ? 22 * 3600 : 3600
+        )
+        let result = TriggerParser.Result(condition: condition, reminderText: nil, confidence: confidence, needsClarification: false, clarifyingQuestion: nil, explanation: explanation)
+        return ParsedTriggerExpression(result: result, sourcePhrase: source, placeAlias: nil, pendingLocationAlias: nil, confidenceContribution: 0.18)
+    }
+
+    private static func first(in normalized: String, _ phrases: [String]) -> String? {
+        phrases.first { normalized.contains($0) }
+    }
 }
 
 struct LocalHeuristicIntentService: AIIntentService {
@@ -52,15 +514,16 @@ enum ReminderIntentParser {
 }
 
 enum ReminderUnderstandingEngine {
-    static func parse(_ rawText: String, history: [Reminder] = []) -> ParsedReminderIntent {
+    static func parse(_ rawText: String, history: [Reminder] = [], now: Date = .now) -> ParsedReminderIntent {
         let text = ReminderInputValidator.sanitize(rawText)
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let grammar = ReminderIntentGrammar.parse(text, now: now)
         let analysis = TextAnalyzer.analyze(text)
-        let triggerResult = TriggerParser.parse(text)
+        let triggerResult = grammar.trigger?.result ?? TriggerParser.parse(text)
         let category = ReminderCategoryClassifier.classify(text: text, analysis: analysis)
-        let cadence = CadenceController.defaultCadence(for: text, category: category, analysis: analysis)
+        let cadence = cadenceForGrammar(grammar, text: text, category: category, analysis: analysis)
         let window = NudgeDecisionEngine.suggestedWindow(
-            text: text,
+            text: grammar.actionText ?? text,
             category: category,
             analysis: analysis,
             history: history
@@ -69,53 +532,29 @@ enum ReminderUnderstandingEngine {
         let hasTrigger = triggerResult.condition.type != .unknownRequiresClarification
         let minConfidence = triggerResult.condition.minimumConfidence
         let isSupported = triggerResult.condition.type.isSupportedWithoutClarification
-        let cleanedText = triggerResult.reminderText ?? stripReminderPrefix(from: text)
+        let cleanedText = grammar.actionText ?? triggerResult.reminderText ?? stripReminderPrefix(from: text)
         let readiness = hasTrigger ? triggerReadiness(for: triggerResult) : nil
         let ambiguity = ambiguityFlags(triggerResult: triggerResult, hasTrigger: hasTrigger)
         let requiredPermissions = hasTrigger ? triggerResult.condition.requiresPermission : [.notifications]
-        let recurrence = recurrenceExpectation(cadence: cadence, hasTrigger: hasTrigger, text: text)
+        let recurrence = grammar.recurrence == nil ? recurrenceExpectation(cadence: cadence, hasTrigger: hasTrigger, text: text) : .recurring
         let intent = inferIntent(from: cleanedText, category: category)
         let urgency = inferUrgency(from: text)
+        let resolvedWindow = grammar.recurrence?.rule.preferredWindow ?? grammar.time?.approximateWindow ?? window
+        let policy = schedulingPolicy(grammar: grammar, hasTrigger: hasTrigger, isSupported: isSupported)
+        let confidenceDetails = confidenceBreakdown(grammar: grammar, analysis: analysis, triggerResult: hasTrigger ? triggerResult : nil, policy: policy)
+        let confidence = confidenceDetails.values.reduce(0, +).clamped(to: 0...1)
+        let confidenceTier = tier(for: confidence)
         let summary = summary(
             text: cleanedText,
-            kind: hasTrigger ? .eventBased : kindForTimeReminder(text: text, cadence: cadence),
+            kind: hasTrigger ? .eventBased : kindForTimeReminder(text: text, cadence: cadence, grammar: grammar),
             category: category,
             triggerResult: hasTrigger ? triggerResult : nil,
-            recurrence: recurrence
+            recurrence: recurrence,
+            grammar: grammar
         )
 
         if hasTrigger && triggerResult.confidence < minConfidence {
-            if isSupported {
-                return ParsedReminderIntent(
-                    reminderText: cleanedText,
-                    kind: .timeBased,
-                    category: category,
-                    suggestedCadence: cadence,
-                    timeWindow: window,
-                    trigger: nil,
-                    confidence: max(0.35, analysis.confidence),
-                    needsClarification: false,
-                    clarifyingQuestion: nil,
-                    explanation: NudgeExplanation(
-                        code: .lowConfidenceTriggerFallback,
-                        text: "Low-confidence trigger fell back to a time-based nudge."
-                    ),
-                    cleanText: cleanedText,
-                    intent: intent,
-                    urgency: urgency,
-                    recurrenceExpectation: recurrence,
-                    timeHints: timeHints(from: text),
-                    eventTriggerHints: hasTrigger ? [triggerResult.condition.type.rawValue] : [],
-                    locationHints: locationHints(from: triggerResult.condition),
-                    deviceContextHints: deviceHints(from: triggerResult.condition),
-                    requiredPermissions: requiredPermissions,
-                    ambiguityFlags: ambiguity + [.lowTriggerConfidence],
-                    interpretationSummary: summary,
-                    triggerReadiness: readiness
-                )
-            }
-
-            return ParsedReminderIntent(
+            var parsed = ParsedReminderIntent(
                 reminderText: cleanedText,
                 kind: .eventBased,
                 category: category,
@@ -137,21 +576,33 @@ enum ReminderUnderstandingEngine {
                 requiredPermissions: requiredPermissions,
                 ambiguityFlags: ambiguity + [.lowTriggerConfidence],
                 interpretationSummary: summary,
-                triggerReadiness: readiness
+                triggerReadiness: readiness,
+                exactDate: grammar.time?.exactDate,
+                approximateDate: grammar.time?.approximateDate,
+                approximateWindow: grammar.time?.approximateWindow,
+                relativeOffsetSeconds: grammar.time?.relativeOffsetSeconds,
+                recurrenceRule: grammar.recurrence?.rule,
+                pendingLocationAlias: grammar.trigger?.pendingLocationAlias,
+                schedulingPolicy: .pendingSetup,
+                confidenceTier: .low,
+                grammarClauses: grammar.clauses
             )
+#if DEBUG
+            parsed.confidenceBreakdown = confidenceDetails
+#endif
+            return parsed
         }
 
-        let confidence = min(1.0, max(analysis.confidence, triggerResult.confidence))
-        let kind = hasTrigger ? ReminderKind.eventBased : kindForTimeReminder(text: text, cadence: cadence)
-        return ParsedReminderIntent(
+        let kind = hasTrigger ? ReminderKind.eventBased : kindForTimeReminder(text: text, cadence: cadence, grammar: grammar)
+        var parsed = ParsedReminderIntent(
             reminderText: cleanedText,
             kind: kind,
             category: category,
             suggestedCadence: cadence,
-            timeWindow: hasTrigger ? nil : window,
+            timeWindow: hasTrigger ? nil : resolvedWindow,
             trigger: hasTrigger ? ReminderTrigger(condition: triggerResult.condition, confidence: triggerResult.confidence) : nil,
             confidence: confidence,
-            needsClarification: triggerResult.needsClarification,
+            needsClarification: hasTrigger ? triggerResult.needsClarification : confidenceTier == .low,
             clarifyingQuestion: triggerResult.clarifyingQuestion,
             explanation: hasTrigger
                 ? NudgeExplanation(code: .waitingForTrigger, text: triggerResult.explanation)
@@ -167,8 +618,21 @@ enum ReminderUnderstandingEngine {
             requiredPermissions: requiredPermissions,
             ambiguityFlags: ambiguity,
             interpretationSummary: summary,
-            triggerReadiness: readiness
+            triggerReadiness: readiness,
+            exactDate: grammar.time?.exactDate,
+            approximateDate: grammar.time?.approximateDate,
+            approximateWindow: grammar.time?.approximateWindow,
+            relativeOffsetSeconds: grammar.time?.relativeOffsetSeconds,
+            recurrenceRule: grammar.recurrence?.rule,
+            pendingLocationAlias: grammar.trigger?.pendingLocationAlias,
+            schedulingPolicy: policy,
+            confidenceTier: confidenceTier,
+            grammarClauses: grammar.clauses
         )
+#if DEBUG
+        parsed.confidenceBreakdown = confidenceDetails
+#endif
+        return parsed
     }
 
     private static func triggerReadiness(for result: TriggerParser.Result) -> TriggerReadiness {
@@ -217,10 +681,58 @@ enum ReminderUnderstandingEngine {
         }
     }
 
-    private static func kindForTimeReminder(text: String, cadence: SuggestedCadence) -> ReminderKind {
+    private static func cadenceForGrammar(_ grammar: GrammarParseResult, text: String, category: ReminderCategory, analysis: TextAnalysis) -> SuggestedCadence {
+        guard let recurrence = grammar.recurrence else {
+            return CadenceController.defaultCadence(for: text, category: category, analysis: analysis)
+        }
+        if recurrence.rule.unit == .day, recurrence.rule.interval == 1 { return .daily }
+        if recurrence.rule.unit == .week { return .fewTimesPerWeek }
+        return .occasional
+    }
+
+    private static func kindForTimeReminder(text: String, cadence: SuggestedCadence, grammar: GrammarParseResult) -> ReminderKind {
+        if grammar.recurrence != nil { return .timeBased }
+        if grammar.time?.exactDate != nil || grammar.time?.relativeOffsetSeconds != nil || grammar.time?.approximateDate != nil {
+            return .oneOff
+        }
         let lower = TriggerParser.normalize(text)
         if lower.contains("bugun") || lower.contains("today") || lower.contains("tonight") { return .oneOff }
         return cadence == .oneOff ? .oneOff : .timeBased
+    }
+
+    private static func schedulingPolicy(grammar: GrammarParseResult, hasTrigger: Bool, isSupported: Bool) -> ReminderSchedulingPolicy {
+        if hasTrigger { return isSupported ? .eventTrigger : .unsupported }
+        if grammar.recurrence != nil { return .recurring }
+        if grammar.time?.relativeOffsetSeconds != nil { return .relativeOffset }
+        if grammar.time?.exactDate != nil { return .exactDate }
+        if grammar.time?.approximateWindow != nil || grammar.time?.approximateDate != nil { return .approximateWindow }
+        return .adaptive
+    }
+
+    private static func confidenceBreakdown(
+        grammar: GrammarParseResult,
+        analysis: TextAnalysis,
+        triggerResult: TriggerParser.Result?,
+        policy: ReminderSchedulingPolicy
+    ) -> [String: Double] {
+        var scores: [String: Double] = ["base": 0.5, "category": min(0.1, analysis.confidence * 0.1)]
+        if grammar.clauses.actionClause != nil { scores["action_clause"] = 0.12 }
+        if let time = grammar.time { scores["time_expression"] = min(0.2, time.confidence * 0.2) }
+        if let recurrence = grammar.recurrence { scores["recurrence_expression"] = min(0.2, recurrence.confidence * 0.2) }
+        if let trigger = triggerResult {
+            scores["trigger_expression"] = min(0.28, trigger.confidence * 0.28)
+            if trigger.condition.locationAlias != nil { scores["known_place_alias"] = 0.08 }
+            if trigger.condition.type == .customContext { scores["unsupported_context_penalty"] = -0.28 }
+            if trigger.condition.locationAlias != nil { scores["missing_setup_penalty"] = -0.04 }
+        }
+        if policy == .adaptive { scores["grammar_absent_penalty"] = -0.05 }
+        return scores
+    }
+
+    private static func tier(for confidence: Double) -> ReminderConfidenceTier {
+        if confidence >= 0.75 { return .high }
+        if confidence >= 0.5 { return .medium }
+        return .low
     }
 
     private static func inferIntent(from text: String, category: ReminderCategory) -> ReminderIntent {
@@ -271,10 +783,17 @@ enum ReminderUnderstandingEngine {
         kind: ReminderKind,
         category: ReminderCategory,
         triggerResult: TriggerParser.Result?,
-        recurrence: RecurrenceExpectation
+        recurrence: RecurrenceExpectation,
+        grammar: GrammarParseResult
     ) -> String {
         if let triggerResult {
-            return "I'll remind you to \(text) when \(triggerResult.explanation.lowercased())"
+            return triggerResult.explanation
+        }
+        if let time = grammar.time {
+            return time.explanation
+        }
+        if let recurrence = grammar.recurrence {
+            return recurrence.explanation
         }
         if recurrence == .flexibleCadence {
             return "I'll nudge gently now and then for \(text)."
@@ -482,6 +1001,10 @@ enum NotificationPlanner {
             )
         }
 
+        if let grammarResult = planFromGrammarSchedule(reminder: reminder, context: context) {
+            return grammarResult
+        }
+
         let dailyCount = dailyPlannedOrSentCount(settings: settings, reminders: context.allReminders, now: now)
         if dailyCount >= settings.notificationLevel.maxDailyNudgesGlobal {
             return notScheduled(.dailyCapReached, .dailyCapReached, "Daily notification cap has been reached.", confidence: 0.4)
@@ -566,6 +1089,73 @@ enum NotificationPlanner {
             code = .categoryDefaultWindow
         }
         return (NudgeTimeWindow.around(hour: best.hour, label: TimeWindowLabel.label(for: best.hour)), max(0.1, min(1.0, best.total)), code)
+    }
+
+    private static func planFromGrammarSchedule(reminder: Reminder, context: NudgeDecisionContext) -> NudgePlanResult? {
+        guard let schedule = reminder.schedule, let policy = schedule.schedulingPolicy else { return nil }
+        let confidence = schedule.confidence ?? 0.6
+        if schedule.confidenceTier == .low {
+            return notScheduled(.needsClarification, .needsClarification, schedule.grammarExplanation ?? "This reminder needs clarification before it can be scheduled.", confidence: confidence)
+        }
+        switch policy {
+        case .exactDate, .relativeOffset:
+            guard let date = schedule.exactDate else { return nil }
+            guard date > context.now else {
+                return notScheduled(.needsClarification, .needsClarification, "The parsed time has already passed.", confidence: confidence)
+            }
+            let window = NudgeTimeWindow.around(hour: Calendar.current.component(.hour, from: date), label: TimeWindowLabel.label(for: Calendar.current.component(.hour, from: date)))
+            let text = schedule.grammarExplanation ?? "Scheduled from the parsed time."
+            return scheduled(reminder: reminder, date: date, selected: (window: window, confidence: confidence, explanation: .parsedTimeHint), explanationText: text)
+        case .approximateWindow:
+            guard let window = schedule.preferredWindow ?? schedule.recurrenceRule?.preferredWindow else { return nil }
+            let targetDay = schedule.approximateDate ?? context.now
+            let widened = schedule.confidenceTier == .medium ? widen(window) : window
+            let date = date(in: widened, on: targetDay, after: context.now)
+            let text = schedule.grammarExplanation ?? "Scheduled in the parsed time window."
+            return scheduled(reminder: reminder, date: date, selected: (window: widened, confidence: confidence, explanation: .parsedTimeHint), explanationText: text)
+        case .recurring:
+            guard let rule = schedule.recurrenceRule else { return nil }
+            let window = schedule.preferredWindow ?? rule.preferredWindow ?? NudgeTimeWindow.around(hour: reminder.category.defaultHours.first ?? 10, label: .lateMorning)
+            let widened = schedule.confidenceTier == .medium ? widen(window) : window
+            let date = nextRecurrenceDate(rule: rule, window: widened, reminder: reminder, context: context)
+            let text = schedule.grammarExplanation ?? "Scheduled from the parsed recurrence rule."
+            return scheduled(reminder: reminder, date: date, selected: (window: widened, confidence: confidence, explanation: .parsedTimeHint), explanationText: text)
+        case .pendingSetup:
+            return notScheduled(.needsClarification, .needsClarification, schedule.grammarExplanation ?? "This reminder needs setup before it can run.", confidence: confidence)
+        case .unsupported:
+            return notScheduled(.unsupported, .unsupportedTrigger, schedule.grammarExplanation ?? "This trigger is not supported locally yet.", confidence: confidence)
+        case .eventTrigger, .adaptive:
+            return nil
+        }
+    }
+
+    private static func date(in window: NudgeTimeWindow, on day: Date, after now: Date) -> Date {
+        let calendar = Calendar.current
+        let hour = (window.startHour + window.endHour) / 2
+        let candidate = calendar.date(bySettingHour: hour, minute: 15, second: 0, of: day) ?? now.addingTimeInterval(300)
+        if candidate > now { return candidate }
+        let tomorrow = calendar.date(byAdding: .day, value: 1, to: day) ?? now.addingTimeInterval(86400)
+        return calendar.date(bySettingHour: hour, minute: 15, second: 0, of: tomorrow) ?? tomorrow
+    }
+
+    private static func nextRecurrenceDate(rule: ReminderRecurrenceRule, window: NudgeTimeWindow, reminder: Reminder, context: NudgeDecisionContext) -> Date {
+        let calendar = Calendar.current
+        let base = reminder.nextNudgeAt ?? context.now
+        let candidateDay: Date
+        switch rule.unit {
+        case .day:
+            candidateDay = calendar.date(byAdding: .day, value: reminder.nextNudgeAt == nil ? 0 : rule.interval, to: calendar.startOfDay(for: base)) ?? context.now
+        case .week:
+            let spacing = max(1, 7 / max(1, rule.timesPerUnit ?? 1))
+            candidateDay = calendar.date(byAdding: .day, value: reminder.nextNudgeAt == nil ? 0 : spacing, to: calendar.startOfDay(for: base)) ?? context.now
+        case .month:
+            candidateDay = calendar.date(byAdding: .month, value: reminder.nextNudgeAt == nil ? 0 : rule.interval, to: calendar.startOfDay(for: base)) ?? context.now
+        }
+        return date(in: window, on: candidateDay, after: context.now)
+    }
+
+    private static func widen(_ window: NudgeTimeWindow) -> NudgeTimeWindow {
+        NudgeTimeWindow(startHour: max(0, window.startHour - 1), endHour: min(23, window.endHour + 1), label: window.label)
     }
 
     private static func semanticScore(for reminder: Reminder, hour: Int) -> Double {
@@ -674,6 +1264,23 @@ enum NotificationPlanner {
         return NudgePlanResult(status: .scheduled, plan: plan, explanation: plan.explanation, confidence: selected.confidence)
     }
 
+    private static func scheduled(
+        reminder: Reminder,
+        date: Date,
+        selected: (window: NudgeTimeWindow, confidence: Double, explanation: NudgeExplanationCode),
+        explanationText: String
+    ) -> NudgePlanResult {
+        let explanation = NudgeExplanation(code: selected.explanation, text: explanationText)
+        let plan = NudgePlan(
+            reminderId: reminder.id,
+            nextFireDate: date,
+            window: selected.window,
+            confidence: selected.confidence,
+            explanation: explanation
+        )
+        return NudgePlanResult(status: .scheduled, plan: plan, explanation: explanation, confidence: selected.confidence)
+    }
+
     private static func notScheduled(_ status: NudgePlanStatus, _ code: NudgeExplanationCode, _ text: String, confidence: Double) -> NudgePlanResult {
         NudgePlanResult(status: status, plan: nil, explanation: NudgeExplanation(code: code, text: text), confidence: confidence)
     }
@@ -750,5 +1357,11 @@ private extension TriggerType {
         case .customContext, .unknownRequiresClarification:
             return false
         }
+    }
+}
+
+private extension Double {
+    func clamped(to range: ClosedRange<Double>) -> Double {
+        min(range.upperBound, max(range.lowerBound, self))
     }
 }

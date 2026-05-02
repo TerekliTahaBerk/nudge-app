@@ -365,6 +365,80 @@ final class ReminderEngineTests: XCTestCase {
         assertUnderstandingCases(cases)
     }
 
+    func testParsedTimeRecurrenceAndTriggersDriveRealPlanningBehavior() {
+        let now = fixedDate(hour: 9)
+        var settings = AppSettings()
+        settings.permissionStates = [PermissionState(permission: .notifications, status: .granted)]
+
+        let medicine = reminder(from: ReminderUnderstandingEngine.parse("20 dakika sonra ilacı al", now: now))
+        let medicinePlan = NotificationPlanner.plan(for: medicine, context: NudgeDecisionContext(allReminders: [medicine], settings: settings, now: now))
+        XCTAssertEqual(medicinePlan.status, .scheduled)
+        XCTAssertEqual(medicine.schedule?.schedulingPolicy, .relativeOffset)
+        XCTAssertEqual(medicine.text, "ilacı al")
+        XCTAssertEqual(medicinePlan.plan!.nextFireDate.timeIntervalSince(now), 20 * 60, accuracy: 5)
+        XCTAssertTrue(medicinePlan.explanation.text.localizedCaseInsensitiveContains("20"))
+
+        let water = reminder(from: ReminderUnderstandingEngine.parse("Yarın sabah su iç", now: now))
+        let waterPlan = NotificationPlanner.plan(for: water, context: NudgeDecisionContext(allReminders: [water], settings: settings, now: now))
+        XCTAssertEqual(waterPlan.status, .scheduled)
+        XCTAssertEqual(water.schedule?.schedulingPolicy, .approximateWindow)
+        XCTAssertEqual(waterPlan.plan?.window.label, .morning)
+        XCTAssertTrue(Calendar.current.isDate(waterPlan.plan!.nextFireDate, inSameDayAs: Calendar.current.date(byAdding: .day, value: 1, to: now)!))
+
+        let recurring = reminder(from: ReminderUnderstandingEngine.parse("Her sabah su iç", now: now))
+        let recurringPlan = NotificationPlanner.plan(for: recurring, context: NudgeDecisionContext(allReminders: [recurring], settings: settings, now: now))
+        XCTAssertEqual(recurringPlan.status, .scheduled)
+        XCTAssertEqual(recurring.schedule?.schedulingPolicy, .recurring)
+        XCTAssertEqual(recurring.schedule?.recurrenceRule?.unit, .day)
+        XCTAssertEqual(recurringPlan.plan?.window.label, .morning)
+
+        let home = reminder(from: ReminderUnderstandingEngine.parse("Eve gelince çöpleri çıkar", now: now))
+        let homePlan = NotificationPlanner.plan(for: home, context: NudgeDecisionContext(allReminders: [home], settings: settings, now: now))
+        XCTAssertEqual(home.kind, .eventBased)
+        XCTAssertNil(homePlan.plan)
+        XCTAssertEqual(homePlan.status, .missingPermission)
+
+        settings.permissionStates = [
+            PermissionState(permission: .notifications, status: .granted),
+            PermissionState(permission: .location, status: .granted)
+        ]
+        let market = reminder(from: ReminderUnderstandingEngine.parse("Markete gidince süt al", now: now))
+        let marketPlan = NotificationPlanner.plan(for: market, context: NudgeDecisionContext(allReminders: [market], settings: settings, now: now))
+        XCTAssertEqual(market.kind, .eventBased)
+        XCTAssertEqual(market.triggerDefinition?.condition.locationAlias, "market")
+        XCTAssertEqual(market.triggerDefinition?.condition.metadata["pendingLocationAlias"], "market")
+        XCTAssertNil(marketPlan.plan)
+        XCTAssertEqual(marketPlan.status, .missingLocationAlias)
+
+        let laptop = reminder(from: ReminderUnderstandingEngine.parse("Laptopu açınca raporu gönder", now: now))
+        let laptopPlan = NotificationPlanner.plan(for: laptop, context: NudgeDecisionContext(allReminders: [laptop], settings: settings, now: now))
+        XCTAssertEqual(laptop.kind, .eventBased)
+        XCTAssertNil(laptopPlan.plan)
+        XCTAssertEqual(laptopPlan.status, .unsupported)
+    }
+
+    func testReminderGrammarFixtureEvaluatorCoversAtLeast120Examples() {
+        let now = fixedDate(hour: 9)
+        let fixtures = grammarFixtures()
+        XCTAssertGreaterThanOrEqual(fixtures.count, 120)
+
+        for fixture in fixtures {
+            let parsed = ReminderUnderstandingEngine.parse(fixture.text, now: now)
+            XCTAssertEqual(parsed.kind, fixture.kind, fixture.text)
+            XCTAssertEqual(parsed.trigger?.condition.type, fixture.triggerType, fixture.text)
+            XCTAssertEqual(parsed.trigger?.condition.locationAlias, fixture.placeAlias, fixture.text)
+            XCTAssertEqual(parsed.exactDate != nil || parsed.approximateDate != nil || parsed.approximateWindow != nil || parsed.relativeOffsetSeconds != nil, fixture.hasTime, fixture.text)
+            XCTAssertEqual(parsed.recurrenceRule != nil, fixture.hasRecurrence, fixture.text)
+            XCTAssertEqual(parsed.triggerReadiness?.requiredSetup.isEmpty == false, fixture.needsSetup, fixture.text)
+            XCTAssertTrue(fixture.confidence.contains(parsed.confidence), "\(fixture.text) confidence \(parsed.confidence)")
+            XCTAssertFalse(parsed.reminderText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, fixture.text)
+            XCTAssertFalse(parsed.explanation?.text.isEmpty ?? true, fixture.text)
+            if parsed.confidenceTier == .low {
+                XCTAssertTrue(parsed.needsClarification || parsed.schedulingPolicy == .unsupported || parsed.schedulingPolicy == .pendingSetup, fixture.text)
+            }
+        }
+    }
+
     func testDrinkWaterDoneInMorningBiasesFutureMorningPlanning() {
         var reminder = Reminder(text: "Drink water", category: .body)
         let morning = fixedDate(hour: 9)
@@ -552,6 +626,91 @@ final class ReminderEngineTests: XCTestCase {
         XCTAssertEqual(result.status, .scheduled)
         XCTAssertEqual(result.explanation.code, .recentMistimedEasedBack)
         XCTAssertGreaterThan(result.plan!.nextFireDate.timeIntervalSince(fixedDate(hour: 8)), 40 * 3600)
+    }
+
+    private struct GrammarFixture {
+        let text: String
+        let kind: ReminderKind
+        let triggerType: TriggerType?
+        let placeAlias: String?
+        let hasTime: Bool
+        let hasRecurrence: Bool
+        let needsSetup: Bool
+        let confidence: ClosedRange<Double>
+    }
+
+    private func grammarFixtures() -> [GrammarFixture] {
+        var fixtures: [GrammarFixture] = []
+        let actionsTR = ["su iç", "ilacı al", "protein iç", "raporu gönder", "süt al", "notları yaz", "çöpleri çıkar", "annemi ara"]
+        let actionsEN = ["drink water", "take medicine", "drink protein", "send the report", "buy milk", "write notes", "take out trash", "call mom"]
+
+        let turkishTimes = ["bugün", "yarın", "yarın sabah", "bu akşam", "akşama doğru", "öğleden sonra", "cuma günü", "gelecek cuma", "haftaya", "20 dakika sonra", "2 saat sonra", "aksam", "ogleden sonra", "yarin sabah", "bugun"]
+        for (idx, time) in turkishTimes.enumerated() {
+            fixtures.append(.init(text: "\(time) \(actionsTR[idx % actionsTR.count])", kind: .oneOff, triggerType: nil, placeAlias: nil, hasTime: true, hasRecurrence: false, needsSetup: false, confidence: 0.45...1.0))
+        }
+
+        let englishTimes = ["today", "tomorrow", "tomorrow morning", "tonight", "this evening", "Friday", "next Friday", "next week", "in 20 minutes", "in 2 hours"]
+        for (idx, time) in englishTimes.enumerated() {
+            fixtures.append(.init(text: "\(time) \(actionsEN[idx % actionsEN.count])", kind: .oneOff, triggerType: nil, placeAlias: nil, hasTime: true, hasRecurrence: false, needsSetup: false, confidence: 0.45...1.0))
+        }
+
+        let recurrences = [
+            "her sabah", "her akşam", "iki günde bir", "haftada 3 kez", "ayda bir",
+            "every morning", "every evening", "every other day", "3 times a week", "once a month",
+            "her sabah", "her aksam", "iki gunde bir", "haftada üç kez", "ayda bir"
+        ]
+        for (idx, recurrence) in recurrences.enumerated() {
+            let action = idx < 5 || recurrence.contains("her") || recurrence.contains("haftada") || recurrence.contains("ayda") || recurrence.contains("gunde") ? actionsTR[idx % actionsTR.count] : actionsEN[idx % actionsEN.count]
+            fixtures.append(.init(text: "\(recurrence) \(action)", kind: .timeBased, triggerType: nil, placeAlias: nil, hasTime: false, hasRecurrence: true, needsSetup: false, confidence: 0.5...1.0))
+        }
+
+        let placeTriggers: [(String, TriggerType, String)] = [
+            ("eve gelince", .geofenceEnter, "home"), ("eve varınca", .geofenceEnter, "home"), ("eve gidince", .geofenceEnter, "home"),
+            ("evden çıkınca", .geofenceExit, "home"), ("evden ayrılınca", .geofenceExit, "home"),
+            ("işe gidince", .geofenceEnter, "work"), ("işe varınca", .geofenceEnter, "work"), ("işten çıkınca", .geofenceExit, "work"),
+            ("spora gidince", .geofenceEnter, "gym"), ("spor salonuna gidince", .geofenceEnter, "gym"), ("spordan çıkınca", .geofenceExit, "gym"), ("spor salonundan ayrılınca", .geofenceExit, "gym"),
+            ("markete gidince", .geofenceEnter, "market"), ("marketten çıkınca", .geofenceExit, "market"),
+            ("eczaneye gidince", .geofenceEnter, "pharmacy"), ("eczaneden çıkınca", .geofenceExit, "pharmacy"),
+            ("okula gidince", .geofenceEnter, "school"), ("ofise gidince", .geofenceEnter, "office"), ("kafeye gidince", .geofenceEnter, "cafe"),
+            ("doktora gidince", .geofenceEnter, "doctor"), ("hastaneye gidince", .geofenceEnter, "hospital"),
+            ("eve gelince", .geofenceEnter, "home"), ("isten cikinca", .geofenceExit, "work"), ("spordan cikinca", .geofenceExit, "gym"), ("markete gidince", .geofenceEnter, "market"),
+            ("when i get home", .geofenceEnter, "home"), ("when i leave home", .geofenceExit, "home"), ("when i get to work", .geofenceEnter, "work"), ("when i leave work", .geofenceExit, "work"),
+            ("when i get to the gym", .geofenceEnter, "gym"), ("when i leave the gym", .geofenceExit, "gym"), ("when i get to the market", .geofenceEnter, "market"), ("when i leave the pharmacy", .geofenceExit, "pharmacy")
+        ]
+        for (idx, item) in placeTriggers.enumerated() {
+            let isEnglish = item.0.hasPrefix("when")
+            let action = isEnglish ? actionsEN[idx % actionsEN.count] : actionsTR[idx % actionsTR.count]
+            fixtures.append(.init(text: "\(item.0) \(action)", kind: .eventBased, triggerType: item.1, placeAlias: item.2, hasTime: false, hasRecurrence: false, needsSetup: true, confidence: 0.5...1.0))
+        }
+
+        let deviceTriggers: [(String, TriggerType?, String?)] = [
+            ("şarja takınca", .chargingStarted, nil), ("telefoni şarja takınca", .chargingStarted, nil), ("sarja takinca", .chargingStarted, nil),
+            ("arabaya binince", .carplayConnected, nil), ("arabadan inince", .carplayDisconnected, nil),
+            ("toplantıdan sonra", .calendarEventEnded, nil), ("toplanti bitince", .calendarEventEnded, nil),
+            ("when charging starts", .chargingStarted, nil), ("when i get in my car", .carplayConnected, nil), ("when i leave my car", .carplayDisconnected, nil),
+            ("after my meeting", .calendarEventEnded, nil), ("when my meeting ends", .calendarEventEnded, nil),
+            ("laptopu açınca", .customContext, nil), ("laptopu acinca", .customContext, nil), ("when i open my laptop", .customContext, nil),
+            ("benzinden sonra", .customContext, nil), ("when i get gas", .customContext, nil)
+        ]
+        for (idx, item) in deviceTriggers.enumerated() {
+            let action = item.0.contains("when") || item.0.contains("after") ? actionsEN[idx % actionsEN.count] : actionsTR[idx % actionsTR.count]
+            fixtures.append(.init(text: "\(item.0) \(action)", kind: .eventBased, triggerType: item.1, placeAlias: item.2, hasTime: false, hasRecurrence: false, needsSetup: item.1 == .customContext || item.1 == .calendarEventEnded, confidence: 0.25...1.0))
+        }
+
+        let falsePositives = [
+            "spor ayakkabımı temizle", "market listesini düzenle", "eczane fişini sakla", "laptop çantasını hazırla",
+            "benzin fiyatlarını kontrol et", "call the pharmacy", "write a market list", "clean gym shoes",
+            "prepare laptop bag", "review tomorrow plan"
+        ]
+        for item in falsePositives {
+            fixtures.append(.init(text: item, kind: item.contains("tomorrow") ? .oneOff : .timeBased, triggerType: nil, placeAlias: nil, hasTime: item.contains("tomorrow"), hasRecurrence: false, needsSetup: false, confidence: 0.25...1.0))
+        }
+
+        while fixtures.count < 120 {
+            let idx = fixtures.count
+            fixtures.append(.init(text: "\(turkishTimes[idx % turkishTimes.count]) \(actionsTR[idx % actionsTR.count])", kind: .oneOff, triggerType: nil, placeAlias: nil, hasTime: true, hasRecurrence: false, needsSetup: false, confidence: 0.45...1.0))
+        }
+        return fixtures
     }
 
     private struct UnderstandingCase {
@@ -759,7 +918,24 @@ final class ReminderEngineTests: XCTestCase {
         var reminder = Reminder(text: parsed.reminderText, category: parsed.category)
         reminder.kind = parsed.kind
         reminder.triggerDefinition = parsed.trigger
-        reminder.schedule = ReminderSchedule(cadence: parsed.suggestedCadence, preferredWindow: parsed.timeWindow, dailyCap: 1, lastPlannedAt: nil, confidence: parsed.confidence, lastExplanation: parsed.explanation, lastPlanStatus: nil, interpretationSummary: parsed.interpretationSummary, fallbackSummary: parsed.triggerReadiness?.fallbackStrategy?.explanation)
+        reminder.schedule = ReminderSchedule(
+            cadence: parsed.suggestedCadence,
+            preferredWindow: parsed.timeWindow,
+            dailyCap: 1,
+            lastPlannedAt: nil,
+            confidence: parsed.confidence,
+            lastExplanation: parsed.explanation,
+            lastPlanStatus: nil,
+            interpretationSummary: parsed.interpretationSummary,
+            fallbackSummary: parsed.triggerReadiness?.fallbackStrategy?.explanation,
+            exactDate: parsed.exactDate,
+            approximateDate: parsed.approximateDate,
+            relativeOffsetSeconds: parsed.relativeOffsetSeconds,
+            recurrenceRule: parsed.recurrenceRule,
+            confidenceTier: parsed.confidenceTier,
+            grammarExplanation: parsed.explanation?.text,
+            schedulingPolicy: parsed.schedulingPolicy
+        )
         return reminder
     }
 

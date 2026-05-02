@@ -294,8 +294,8 @@ This checklist is for real-device readiness only. Keep the app calm and unchange
 
 ---
 
-## Low-Confidence Trigger Fallback
+## Low-Confidence Trigger Handling
 
 1. Create `Telefonu açınca bir şey yap` (device unlock — confidence 0.58).
-2. Confirm the understanding engine falls back to time-based (since `isSupportedWithoutClarification = true` and confidence < minimum).
-3. Confirm the reminder is scheduled as a regular time-based reminder, not as an event trigger.
+2. Confirm the understanding engine keeps the trigger interpretation instead of silently converting it to a time-based reminder.
+3. Confirm low confidence produces clarification, pending setup, unsupported fallback, or a non-scheduled state depending on the trigger.

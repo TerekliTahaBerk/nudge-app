@@ -461,6 +461,25 @@ enum NotificationPlanner {
             guard TriggerExecutionPolicy.matches(event, condition: trigger.condition) else {
                 return notScheduled(.waitingForTrigger, .waitingForTrigger, "Received event does not match this trigger.", confidence: trigger.confidence)
             }
+
+            // Trigger matched — schedule immediately, respecting only daily cap and quiet hours.
+            let dailyCountTriggered = dailyPlannedOrSentCount(settings: settings, reminders: context.allReminders, now: now)
+            if dailyCountTriggered >= settings.notificationLevel.maxDailyNudgesGlobal {
+                return notScheduled(.dailyCapReached, .dailyCapReached, "Daily notification cap has been reached.", confidence: 0.4)
+            }
+            let immediateCandidate = now.addingTimeInterval(5)
+            let immediateHour = calendar.component(.hour, from: immediateCandidate)
+            let fireDate = AdaptiveEngine.isQuiet(hour: immediateHour, settings: settings)
+                ? firstNonQuietDate(after: immediateCandidate, settings: settings)
+                : immediateCandidate
+            let fireHour = calendar.component(.hour, from: fireDate)
+            let nowWindow = NudgeTimeWindow.around(hour: fireHour, label: TimeWindowLabel.label(for: fireHour))
+            return scheduled(
+                reminder: reminder,
+                date: fireDate,
+                selected: (window: nowWindow, confidence: 0.9, explanation: .triggeredByEvent),
+                explanation: .triggeredByEvent
+            )
         }
 
         let dailyCount = dailyPlannedOrSentCount(settings: settings, reminders: context.allReminders, now: now)

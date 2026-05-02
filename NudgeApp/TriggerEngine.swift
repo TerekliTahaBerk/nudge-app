@@ -32,6 +32,15 @@ enum TriggerParser {
         if containsAny(lower, ["spor salonundan ayrilinca", "spor salonundan cikinca", "gymden ayrilinca", "gym den ayrilinca", "when i leave the gym"]) {
             return place(.geofenceExit, alias: "gym", raw: text, confidence: 0.89)
         }
+        if containsAny(lower, ["markete gidince", "markete gitince"]) {
+            return place(.geofenceEnter, alias: "market", raw: text, confidence: 0.78)
+        }
+        if containsAny(lower, ["eczaneye gidince"]) {
+            return place(.geofenceEnter, alias: "pharmacy", raw: text, confidence: 0.78)
+        }
+        if containsAny(lower, ["ise gidince", "ise gitince"]) {
+            return place(.geofenceEnter, alias: "work", raw: text, confidence: 0.82)
+        }
         if containsAny(lower, ["markete varinca", "market gelince", "eczane gelince", "eczaneye varinca", "magazaya girince", "when i get to the store", "when i arrive at the pharmacy", "when i get to the market"]) {
             let alias = lower.contains("eczane") || lower.contains("pharmacy") ? "pharmacy" : lower.contains("market") ? "market" : "store"
             return place(.geofenceEnter, alias: alias, raw: text, confidence: 0.78)
@@ -169,6 +178,8 @@ enum TriggerParser {
             "evden cikinca", "evden ayrilinca", "spor salonuna varinca", "spora varinca",
             "isten cikinca", "ofisten ayrilinca", "spor salonundan ayrilinca",
             "spor salonundan cikinca", "gymden ayrilinca", "gym den ayrilinca",
+            "markete gidince", "markete gitince", "eczaneye gidince",
+            "ise gidince", "ise gitince",
             "markete varinca", "market gelince", "eczane gelince", "eczaneye varinca",
             "magazaya girince", "marketten cikinca", "eczaneden cikinca", "magazadan cikinca",
             "sarja takinca", "telefonu sarja takinca", "sabah telefonu acinca",
@@ -216,8 +227,14 @@ enum TriggerResolver {
         if !missing.isEmpty {
             return TriggerResolution(isReady: false, condition: condition, missingPermissions: missing, fallback: FallbackStrategy.strategy(for: condition))
         }
-        if let alias = condition.locationAlias, !aliases.contains(where: { $0.name == alias }) {
-            return TriggerResolution(isReady: false, condition: condition, missingPermissions: [], fallback: .askToDefineLocation(alias))
+        if let alias = condition.locationAlias {
+            if let found = aliases.first(where: { $0.name == alias }) {
+                if found.latitude == nil || found.longitude == nil {
+                    return TriggerResolution(isReady: false, condition: condition, missingPermissions: [], fallback: .askToDefineLocation(alias))
+                }
+            } else {
+                return TriggerResolution(isReady: false, condition: condition, missingPermissions: [], fallback: .askToDefineLocation(alias))
+            }
         }
         return TriggerResolution(isReady: true, condition: condition, missingPermissions: [], fallback: nil)
     }
@@ -248,8 +265,10 @@ enum TriggerExecutionPolicy {
 
     static func shouldFire(condition: TriggerCondition, event: TriggerEvent, eventLog: [TriggerEventLog], now: Date = .now) -> Bool {
         guard matches(event, condition: condition) else { return false }
+        let cooldownSubject = condition.subject
         let recent = eventLog.filter {
             $0.triggerType == condition.type &&
+            $0.subject == cooldownSubject &&
             $0.createdAt > now.addingTimeInterval(-(condition.cooldownSeconds ?? defaultCooldown))
         }
         return recent.isEmpty

@@ -391,18 +391,31 @@ struct TriggerEvent: Codable, Hashable {
 struct TriggerEventLog: Codable, Identifiable, Hashable {
     let id: UUID
     var triggerType: TriggerType
+    var subject: String?
     var reminderId: UUID?
     var confidence: Double
     var createdAt: Date
     var fired: Bool
 
-    init(id: UUID = UUID(), triggerType: TriggerType, reminderId: UUID? = nil, confidence: Double, createdAt: Date = .now, fired: Bool = false) {
+    init(id: UUID = UUID(), triggerType: TriggerType, subject: String? = nil, reminderId: UUID? = nil, confidence: Double, createdAt: Date = .now, fired: Bool = false) {
         self.id = id
         self.triggerType = triggerType
+        self.subject = subject
         self.reminderId = reminderId
         self.confidence = confidence
         self.createdAt = createdAt
         self.fired = fired
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        triggerType = try c.decode(TriggerType.self, forKey: .triggerType)
+        subject = try c.decodeIfPresent(String.self, forKey: .subject)
+        reminderId = try c.decodeIfPresent(UUID.self, forKey: .reminderId)
+        confidence = try c.decode(Double.self, forKey: .confidence)
+        createdAt = try c.decode(Date.self, forKey: .createdAt)
+        fired = try c.decode(Bool.self, forKey: .fired)
     }
 }
 

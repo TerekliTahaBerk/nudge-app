@@ -18,8 +18,18 @@
 	<string>$(MARKETING_VERSION)</string>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Location helps reminders fire when you arrive at or leave saved places.</string>
+	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
+	<string>Background location lets reminders fire when you arrive or leave even when the app is closed.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>For voice reminders.</string>
 	<key>NSUserNotificationsUsageDescription</key>
 	<string>Gentle reminders arrive when you're likely to welcome them — never during quiet hours.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>location</string>
+	</array>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

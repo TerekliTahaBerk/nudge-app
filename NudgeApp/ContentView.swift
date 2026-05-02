@@ -37,6 +37,8 @@ final class AppState: ObservableObject {
     private var midnightTimer: AnyCancellable?
     private var maybeLaterTimer: AnyCancellable?
     private let scheduler = NotificationScheduler.shared
+    private var deviceContextAdapter: IOSDeviceContextAdapter?
+    private var locationAdapter: IOSLocationTriggerAdapter?
 
     // ── Init ───────────────────────────────────────────────────────
 
@@ -62,17 +64,45 @@ final class AppState: ObservableObject {
     }
 
     private func postInitSetup() async {
-        // Request notification permission if not yet decided
+        // ── Device context adapter (battery/charging) ──────────────
+        let dca = IOSDeviceContextAdapter()
+        dca.start { [weak self] event in
+            Task { @MainActor in self?.recordTriggerEvent(event) }
+        }
+        deviceContextAdapter = dca
+
+        // ── Location adapter (geofencing) ──────────────────────────
+        let la = IOSLocationTriggerAdapter()
+        la.onTriggerEvent = { [weak self] event in
+            Task { @MainActor in self?.recordTriggerEvent(event) }
+        }
+        la.onPermissionChange = { [weak self] status in
+            Task { @MainActor in
+                self?.upsertPermission(.location, status: status)
+                if let self {
+                    self.locationAdapter?.reconcile(
+                        aliases: self.settings.locationAliases,
+                        reminders: self.reminders
+                    )
+                }
+            }
+        }
+        locationAdapter = la
+        la.requestPermission()
+        upsertPermission(.location, status: la.currentAuthorizationStatus)
+
+        // ── Notification permission ────────────────────────────────
         if await !scheduler.isAuthorized {
             _ = await scheduler.requestPermission()
         }
         await refreshNotificationPermissionState()
+
+        // ── Reconcile everything on launch ─────────────────────────
+        reconcileReminderSystemOnLaunch()
         startNudgeTimer()
         scheduleMidnightReset()
-        // Schedule all pending notifications
         await scheduler.scheduleAll(reminders, settings: settings)
         save()
-        // Pick the first behaviour observation worth surfacing.
         await MainActor.run { recomputeBehaviorBanner() }
     }
 
@@ -240,6 +270,7 @@ final class AppState: ObservableObject {
         settings.nudgeHistory.removeAll { $0.reminderId == id }
         settings.userFeedback.removeAll { $0.reminderId == id }
         save()
+        locationAdapter?.reconcile(aliases: settings.locationAliases, reminders: reminders)
     }
 
     func addReminder(
@@ -304,6 +335,10 @@ final class AppState: ObservableObject {
         if type == .standard {
             Task { await scheduler.scheduleNudge(for: r, settings: settings, allReminders: reminders) }
         }
+        if r.triggerDefinition?.condition.type == .geofenceEnter ||
+           r.triggerDefinition?.condition.type == .geofenceExit {
+            locationAdapter?.reconcile(aliases: settings.locationAliases, reminders: reminders)
+        }
         showAddSheet = false
     }
 
@@ -343,6 +378,7 @@ final class AppState: ObservableObject {
             reminders[idx].triggerDefinition?.lastFiredAt = event.createdAt
             settings.triggerEventLog.append(TriggerEventLog(
                 triggerType: event.type,
+                subject: event.subject,
                 reminderId: reminders[idx].id,
                 confidence: result.confidence,
                 createdAt: event.createdAt,
@@ -359,6 +395,7 @@ final class AppState: ObservableObject {
                 scheduler.cancel(reminderId: id)
                 await scheduler.scheduleNudge(for: reminder, settings: settings, allReminders: reminders)
             }
+            await MainActor.run { self.checkForDueNudges() }
         }
     }
 
@@ -463,6 +500,20 @@ final class AppState: ObservableObject {
             applyPlanResult(result, to: &reminders[idx], recordHistory: false)
             DebugLog.plan("Reconciled loaded reminder \(reminders[idx].id)")
         }
+    }
+
+    private func reconcileReminderSystemOnLaunch() {
+        reconcileLoadedReminderPlans()
+        upsertPermission(.location, status: locationAdapter?.currentAuthorizationStatus ?? .unknown)
+        locationAdapter?.reconcile(aliases: settings.locationAliases, reminders: reminders)
+        save()
+    }
+
+    func reconcileLocationTriggers() {
+        reconcileLoadedReminderPlans()
+        locationAdapter?.reconcile(aliases: settings.locationAliases, reminders: reminders)
+        save()
+        Task { await scheduler.scheduleAll(reminders, settings: settings) }
     }
 
     private func recordMorningFirstUnlockIfNeeded(now: Date = .now) {

@@ -432,17 +432,44 @@ enum PlaceExpressionParser {
 enum DeviceContextExpressionParser {
     static func parse(_ text: String) -> ParsedTriggerExpression? {
         let normalized = TurkishNormalizer.normalize(text)
+        if let source = first(in: normalized, ["uygulamayi acinca", "uygulamayı acınca", "appi acinca", "appı acınca", "app i acinca", "app ı acınca", "when i open the app", "when the app opens"]) {
+            return event(.appOpen, source: source, confidence: 0.9, permissions: [.notifications], explanation: "Understood as: when you open the app.")
+        }
+        if let source = first(in: normalized, ["sabah telefonu acinca", "sabah telefonu acınca", "sabah ilk acinca", "sabah ilk acınca", "telefonu kilidini acinca", "telefonu kilidini acınca", "uyandigimda", "uyandığımda", "when i unlock my phone in the morning", "unlock in the morning", "morning first unlock", "when i wake up"]) {
+            return event(.morningFirstUnlock, source: source, confidence: 0.82, permissions: [.notifications], explanation: "Understood as: morning first foreground. iOS does not provide direct phone-unlock detection.")
+        }
         if let source = first(in: normalized, ["sarja takinca", "telefonu sarja takinca", "when i plug in", "when charging starts"]) {
             return event(.chargingStarted, source: source, confidence: 0.92, permissions: [.notifications], explanation: "Understood as: when charging starts.")
         }
-        if let source = first(in: normalized, ["arabaya binince", "arabama binince", "when i get in my car", "when carplay connects"]) {
-            return event(.carplayConnected, source: source, confidence: 0.82, permissions: [.notifications, .bluetooth], explanation: "Understood as: when you get in the car.")
+        if let source = first(in: normalized, ["spotifyi acinca", "spotifyı acınca", "spotify acinca", "spotify acınca", "spotify i acinca", "spotify ı acınca", "when i open spotify"]) {
+            return futureAdapter(.spotifyOpened, subject: "spotify", source: source, confidence: 0.68, permissions: [.notifications], explanation: "Spotify/music triggers need a future integration or Shortcut setup.")
         }
-        if let source = first(in: normalized, ["arabadan inince", "arabadan cikinca", "when i leave my car", "when carplay disconnects"]) {
-            return event(.carplayDisconnected, source: source, confidence: 0.82, permissions: [.notifications, .bluetooth], explanation: "Understood as: when you leave the car.")
+        if let source = first(in: normalized, ["sarki acinca", "sarkı acınca", "muzik calinca", "muzik calınca", "muzik dinlemeye baslayinca", "muzik dinlemeye baslayınca", "when i play music", "when music starts", "when i start listening to music"]) {
+            return futureAdapter(.musicStarted, subject: "music", source: source, confidence: 0.68, permissions: [.notifications], explanation: "Spotify/music triggers need a future integration or Shortcut setup.")
+        }
+        if let source = first(in: normalized, ["kulakligi takinca", "kulaklıgı takınca", "kulaklığı takınca", "headphones connected", "when headphones connect", "when i connect headphones"]) {
+            return futureAdapter(.headphonesConnected, subject: "headphones", source: source, confidence: 0.68, permissions: [.notifications, .bluetooth], explanation: "Headphone triggers need a future adapter or Shortcut setup.")
+        }
+        if let source = first(in: normalized, ["arabaya binince", "arabama binince", "when i get in my car", "when carplay connects", "car bluetooth connected"]) {
+            return futureAdapter(.carBluetoothConnected, subject: "car", source: source, confidence: 0.72, permissions: [.notifications, .bluetooth], explanation: "Car Bluetooth or CarPlay triggers need a future adapter or Shortcut setup.")
+        }
+        if let source = first(in: normalized, ["arabadan inince", "arabadan cikinca", "when i leave my car", "when carplay disconnects", "car bluetooth disconnected"]) {
+            return futureAdapter(.carBluetoothDisconnected, subject: "car", source: source, confidence: 0.72, permissions: [.notifications, .bluetooth], explanation: "Car Bluetooth or CarPlay triggers need a future adapter or Shortcut setup.")
+        }
+        if let source = first(in: normalized, ["eve wifisine baglaninca", "ev wifisine baglaninca", "connected to home wifi", "connected to home wi fi"]) {
+            return futureAdapter(.homeWifiConnected, subject: "home_wifi", source: source, confidence: 0.66, permissions: [.notifications, .localNetwork], explanation: "Home Wi-Fi triggers need a future adapter or Shortcut setup.")
+        }
+        if let source = first(in: normalized, ["wifiye baglaninca", "wi fiye baglaninca", "connected to wifi", "connected to wi fi"]) {
+            return futureAdapter(.wifiConnected, subject: "wifi", source: source, confidence: 0.64, permissions: [.notifications, .localNetwork], explanation: "Wi-Fi triggers need a future adapter or Shortcut setup.")
         }
         if let source = first(in: normalized, ["toplantidan sonra", "toplanti bitince", "after my meeting", "after the meeting", "when my meeting ends"]) {
             return event(.calendarEventEnded, source: source, confidence: 0.74, permissions: [.notifications, .calendar], explanation: "Needs calendar access before it can work.")
+        }
+        if let source = first(in: normalized, ["yuruyus bitince", "antrenman bitince", "spor bitince", "workout ended", "when my workout ends", "after workout"]) {
+            return event(.workoutEnded, source: source, confidence: 0.74, permissions: [.notifications, .motionFitness], explanation: "Needs fitness access before it can work.")
+        }
+        if let source = first(in: normalized, ["yatmadan once", "before bed", "before bedtime"]) {
+            return event(.eveningWindow, source: source, confidence: 0.78, permissions: [.notifications], explanation: "Understood as: before bed.")
         }
         if let source = first(in: normalized, ["laptopu acinca", "laptopumu acinca", "bilgisayarimi acinca", "bilgisayarimin kapagini acinca", "when i open my laptop", "open my laptop"]) {
             let condition = TriggerCondition(
@@ -462,25 +489,66 @@ enum DeviceContextExpressionParser {
             )
             return ParsedTriggerExpression(result: result, sourcePhrase: source, placeAlias: nil, pendingLocationAlias: nil, confidenceContribution: -0.25)
         }
-        if let source = first(in: normalized, ["benzinden sonra", "benzin alinca", "yakit alinca", "when i get gas", "when i buy fuel", "at the gas station"]) {
+        if let source = first(in: normalized, ["benzinden sonra", "benzin alinca", "benzin alınca", "yakit alinca", "yakit alınca", "yakıt alınca", "when i get gas", "when i buy fuel", "at the gas station"]) {
+            let pattern = PlaceExpressionParser.PlacePattern(
+                aliases: [source],
+                normalizedAlias: "gas_station",
+                displayAlias: "Gas Station",
+                category: "gas_station",
+                type: .geofenceEnter,
+                confidence: 0.82
+            )
+            return gasStationPlace(pattern, sourcePhrase: source)
+        }
+        return nil
+    }
+
+    private static func gasStationPlace(_ pattern: PlaceExpressionParser.PlacePattern, sourcePhrase: String) -> ParsedTriggerExpression {
+        let metadata = [
+            "actionable": "true",
+            "normalizedAlias": pattern.normalizedAlias,
+            "displayAlias": pattern.displayAlias,
+            "placeCategory": pattern.category,
+            "sourcePhrase": sourcePhrase,
+            "pendingLocationAlias": pattern.normalizedAlias
+        ]
+        let condition = TriggerCondition(
+            type: pattern.type,
+            subject: pattern.normalizedAlias,
+            locationAlias: pattern.normalizedAlias,
+            metadata: metadata,
+            requiresPermission: [.notifications, .location],
+            minimumConfidence: 0.7,
+            cooldownSeconds: 3600
+        )
+        let result = TriggerParser.Result(
+            condition: condition,
+            reminderText: nil,
+            confidence: pattern.confidence,
+            needsClarification: true,
+            clarifyingQuestion: "Which gas station location should I use?",
+            explanation: "Understood as: when you arrive at Gas Station."
+        )
+        return ParsedTriggerExpression(result: result, sourcePhrase: sourcePhrase, placeAlias: pattern.normalizedAlias, pendingLocationAlias: pattern.normalizedAlias, confidenceContribution: 0.12)
+    }
+
+    private static func futureAdapter(_ type: TriggerType, subject: String, source: String, confidence: Double, permissions: [PermissionKind], explanation: String) -> ParsedTriggerExpression {
             let condition = TriggerCondition(
-                type: .customContext,
-                subject: "fuel_stop",
-                metadata: ["fallback": "gas_station_location_car_bluetooth_confirmation", "actionable": "false", "sourcePhrase": source],
-                requiresPermission: [.notifications, .location, .bluetooth],
-                minimumConfidence: 0.8
+                type: type,
+                subject: subject,
+                metadata: ["fallback": "future_adapter_or_shortcuts", "actionable": "false", "sourcePhrase": source],
+                requiresPermission: permissions,
+                minimumConfidence: 0.65
             )
             let result = TriggerParser.Result(
                 condition: condition,
                 reminderText: nil,
-                confidence: 0.42,
+                confidence: confidence,
                 needsClarification: true,
-                clarifyingQuestion: "Fuel-stop reminders need confirmation or setup first.",
-                explanation: "Fuel stops are not supported as an automatic local trigger yet."
+                clarifyingQuestion: explanation,
+                explanation: explanation
             )
-            return ParsedTriggerExpression(result: result, sourcePhrase: source, placeAlias: nil, pendingLocationAlias: nil, confidenceContribution: -0.25)
-        }
-        return nil
+        return ParsedTriggerExpression(result: result, sourcePhrase: source, placeAlias: nil, pendingLocationAlias: nil, confidenceContribution: -0.12)
     }
 
     private static func event(_ type: TriggerType, source: String, confidence: Double, permissions: [PermissionKind], explanation: String) -> ParsedTriggerExpression {
@@ -647,6 +715,8 @@ enum ReminderUnderstandingEngine {
             setup = ["calendar_access"]
         } else if condition.type == .workoutEnded {
             setup = ["motion_fitness_access"]
+        } else if condition.metadata["actionable"] == "false" {
+            setup = [condition.metadata["fallback"] ?? fallback.explanation]
         } else {
             setup = []
         }
@@ -666,9 +736,8 @@ enum ReminderUnderstandingEngine {
         guard hasTrigger else { return [] }
         var flags: [ReminderAmbiguityFlag] = []
         if triggerResult.condition.locationAlias != nil { flags.append(.missingLocationAlias) }
-        if triggerResult.condition.type == .customContext { flags.append(.unsupportedTrigger) }
+        if triggerResult.condition.type == .customContext || triggerResult.condition.metadata["actionable"] == "false" { flags.append(.unsupportedTrigger) }
         if triggerResult.condition.type == .calendarEventEnded { flags.append(.calendarPermissionNeeded) }
-        if triggerResult.condition.subject == "fuel_stop" { flags.append(.needsConfirmation) }
         return flags
     }
 
@@ -723,6 +792,7 @@ enum ReminderUnderstandingEngine {
             scores["trigger_expression"] = min(0.28, trigger.confidence * 0.28)
             if trigger.condition.locationAlias != nil { scores["known_place_alias"] = 0.08 }
             if trigger.condition.type == .customContext { scores["unsupported_context_penalty"] = -0.28 }
+            if trigger.condition.metadata["actionable"] == "false" { scores["unsupported_context_penalty"] = -0.2 }
             if trigger.condition.locationAlias != nil { scores["missing_setup_penalty"] = -0.04 }
         }
         if policy == .adaptive { scores["grammar_absent_penalty"] = -0.05 }
@@ -769,7 +839,9 @@ enum ReminderUnderstandingEngine {
 
     private static func deviceHints(from condition: TriggerCondition) -> [String] {
         switch condition.type {
-        case .chargingStarted, .morningFirstUnlock, .deviceUnlock, .bluetoothConnected, .bluetoothDisconnected, .carplayConnected, .carplayDisconnected:
+        case .appOpen, .chargingStarted, .morningFirstUnlock, .deviceUnlock, .bluetoothConnected, .bluetoothDisconnected, .carplayConnected, .carplayDisconnected,
+                .musicStarted, .spotifyOpened, .mediaContextUnsupported, .headphonesConnected, .carBluetoothConnected, .carBluetoothDisconnected,
+                .wifiConnected, .homeWifiConnected, .workoutEnded, .calendarEventEnded, .eveningWindow:
             return [condition.type.rawValue]
         case .customContext:
             return [condition.subject ?? condition.type.rawValue]
@@ -1577,11 +1649,12 @@ enum TimeWindowLabel: String, Codable, Hashable {
 private extension TriggerType {
     var isSupportedWithoutClarification: Bool {
         switch self {
-        case .chargingStarted, .morningFirstUnlock, .bluetoothConnected, .bluetoothDisconnected, .carplayConnected, .carplayDisconnected:
+        case .appOpen, .chargingStarted, .morningFirstUnlock, .eveningWindow:
             return true
-        case .geofenceEnter, .geofenceExit, .deviceUnlock, .wifiConnected, .workoutEnded, .calendarEventEnded:
+        case .geofenceEnter, .geofenceExit, .deviceUnlock, .bluetoothConnected, .bluetoothDisconnected, .carplayConnected, .carplayDisconnected:
             return true
-        case .customContext, .unknownRequiresClarification:
+        case .musicStarted, .spotifyOpened, .mediaContextUnsupported, .headphonesConnected, .carBluetoothConnected, .carBluetoothDisconnected,
+                .wifiConnected, .homeWifiConnected, .workoutEnded, .calendarEventEnded, .customContext, .unknownRequiresClarification:
             return false
         }
     }

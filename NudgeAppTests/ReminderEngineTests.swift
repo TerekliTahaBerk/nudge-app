@@ -174,6 +174,37 @@ final class ReminderEngineTests: XCTestCase {
         XCTAssertEqual(result.status, .waitingForTrigger)
     }
 
+    func testSettingsAliasesNormalizeWithoutRenderTimeMutation() {
+        let empty: [LocationAlias] = []
+        let normalized = LocationAliasCatalog.normalized(empty)
+
+        XCTAssertEqual(Array(normalized.map(\.name).prefix(4)), ["home", "work", "gym", "gas_station"])
+        XCTAssertTrue(empty.isEmpty, "Normalization must be a pure migration step, not a SwiftUI render-time append.")
+
+        let secondPass = LocationAliasCatalog.normalized(normalized)
+        XCTAssertEqual(secondPass.map(\.name), normalized.map(\.name))
+        XCTAssertEqual(Set(secondPass.map(\.id)), Set(normalized.map(\.id)))
+    }
+
+    func testOldSettingsJSONDecodesWithDefaultAliases() throws {
+        let json = """
+        {
+          "userName":"T",
+          "onboarded":true,
+          "notificationLevel":"medium",
+          "smartTimingEnabled":true,
+          "quietHoursStart":23,
+          "quietHoursEnd":8
+        }
+        """.data(using: .utf8)!
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+
+        let settings = try decoder.decode(AppSettings.self, from: json)
+
+        XCTAssertEqual(Array(settings.locationAliases.map(\.name).prefix(4)), ["home", "work", "gym", "gas_station"])
+    }
+
     @MainActor
     func testCancelEditLeavesReminderUnchanged() {
         let state = AppState(scheduler: FakeNotificationScheduler(), locationAdapter: FakeLocationAdapter(), startsServicesAutomatically: false)
@@ -345,7 +376,10 @@ final class ReminderEngineTests: XCTestCase {
             .init("Her sabah su iç", .timeBased, nil, .body, 0.35...1.0, [.notifications], false, true, nil),
             .init("Bazen yürüyüşe çık", .timeBased, nil, .move, 0.35...1.0, [.notifications], false, true, nil),
             .init("Toplantıdan sonra notları gönder", .eventBased, .calendarEventEnded, .work, 0.65...0.85, [.notifications, .calendar], false, false, .calendarPermissionNeeded),
-            .init("Benzin alınca fişi sakla", .eventBased, .customContext, .errand, 0.35...0.55, [.notifications, .location, .bluetooth], false, false, .needsConfirmation)
+            .init("Benzin alınca fişi sakla", .eventBased, .geofenceEnter, .errand, 0.5...1.0, [.notifications, .location], true, false, .missingLocationAlias),
+            .init("Uygulamayı açınca nefes al", .eventBased, .appOpen, .mind, 0.65...1.0, [.notifications], false, true, nil),
+            .init("Spotify’ı açınca su iç", .eventBased, .spotifyOpened, .body, 0.35...0.75, [.notifications], true, false, .unsupportedTrigger),
+            .init("Müzik çalınca esne", .eventBased, .musicStarted, .move, 0.35...0.75, [.notifications], true, false, .unsupportedTrigger)
         ]
 
         assertUnderstandingCases(cases)
@@ -359,7 +393,9 @@ final class ReminderEngineTests: XCTestCase {
             .init("Call mom tonight", .oneOff, nil, .social, 0.35...1.0, [.notifications], false, true, nil),
             .init("Drink water every morning", .timeBased, nil, .body, 0.35...1.0, [.notifications], false, true, nil),
             .init("Remind me after my meeting", .eventBased, .calendarEventEnded, .work, 0.65...0.85, [.notifications, .calendar], false, false, .calendarPermissionNeeded),
-            .init("Remind me when I connect to my car", .eventBased, .carplayConnected, .grow, 0.7...0.9, [.notifications, .bluetooth], false, false, nil)
+            .init("Remind me when I connect to my car", .eventBased, .carBluetoothConnected, .grow, 0.45...0.9, [.notifications, .bluetooth], true, false, .unsupportedTrigger),
+            .init("When I open the app, drink water", .eventBased, .appOpen, .body, 0.65...1.0, [.notifications], false, true, nil),
+            .init("When music starts, stretch", .eventBased, .musicStarted, .move, 0.35...0.75, [.notifications], true, false, .unsupportedTrigger)
         ]
 
         assertUnderstandingCases(cases)
@@ -417,10 +453,59 @@ final class ReminderEngineTests: XCTestCase {
         XCTAssertEqual(laptopPlan.status, .unsupported)
     }
 
-    func testReminderGrammarFixtureEvaluatorCoversAtLeast120Examples() {
+    func testAppOpenTriggerSchedulesFromForegroundEvent() {
+        var settings = AppSettings()
+        settings.permissionStates = [PermissionState(permission: .notifications, status: .granted)]
+        let reminder = reminder(from: ReminderUnderstandingEngine.parse("Uygulamayı açınca su iç", now: fixedDate(hour: 9)))
+        let event = TriggerEventSimulator.appOpen(now: fixedDate(hour: 9))
+
+        let result = NotificationPlanner.plan(
+            for: reminder,
+            context: NudgeDecisionContext(allReminders: [reminder], settings: settings, now: event.createdAt, triggeredBy: event)
+        )
+
+        XCTAssertEqual(reminder.triggerDefinition?.condition.type, .appOpen)
+        XCTAssertEqual(result.status, .scheduled)
+        XCTAssertNotNil(result.plan)
+    }
+
+    func testSpotifyTriggerIsUnderstoodButNotFakeActionable() {
+        var settings = AppSettings()
+        settings.permissionStates = [PermissionState(permission: .notifications, status: .granted)]
+        let parsed = ReminderUnderstandingEngine.parse("Spotify’ı açınca su iç", now: fixedDate(hour: 9))
+        let reminder = reminder(from: parsed)
+
+        let result = NotificationPlanner.plan(
+            for: reminder,
+            context: NudgeDecisionContext(allReminders: [reminder], settings: settings, now: fixedDate(hour: 9))
+        )
+
+        XCTAssertEqual(parsed.trigger?.condition.type, .spotifyOpened)
+        XCTAssertEqual(parsed.triggerReadiness?.isCurrentlyActionable, false)
+        XCTAssertEqual(result.status, .unsupported)
+        XCTAssertNil(result.plan)
+        XCTAssertTrue((parsed.explanation?.text ?? result.explanation.text).contains("future integration"))
+    }
+
+    func testGasStationTriggerIsPendingAliasNotUnsupported() {
+        var settings = AppSettings()
+        settings.permissionStates = [
+            PermissionState(permission: .notifications, status: .granted),
+            PermissionState(permission: .location, status: .granted)
+        ]
+        let parsed = ReminderUnderstandingEngine.parse("Benzin alınca fişi sakla", now: fixedDate(hour: 9))
+        let reminder = reminder(from: parsed)
+        let result = NotificationPlanner.plan(for: reminder, context: NudgeDecisionContext(allReminders: [reminder], settings: settings, now: fixedDate(hour: 9)))
+
+        XCTAssertEqual(parsed.trigger?.condition.type, .geofenceEnter)
+        XCTAssertEqual(parsed.trigger?.condition.locationAlias, "gas_station")
+        XCTAssertEqual(result.status, .missingLocationAlias)
+    }
+
+    func testReminderGrammarFixtureEvaluatorCoversAtLeast150Examples() {
         let now = fixedDate(hour: 9)
         let fixtures = grammarFixtures()
-        XCTAssertGreaterThanOrEqual(fixtures.count, 120)
+        XCTAssertGreaterThanOrEqual(fixtures.count, 150)
 
         for fixture in fixtures {
             let parsed = ReminderUnderstandingEngine.parse(fixture.text, now: now)
@@ -816,16 +901,25 @@ final class ReminderEngineTests: XCTestCase {
 
         let deviceTriggers: [(String, TriggerType?, String?)] = [
             ("şarja takınca", .chargingStarted, nil), ("telefoni şarja takınca", .chargingStarted, nil), ("sarja takinca", .chargingStarted, nil),
-            ("arabaya binince", .carplayConnected, nil), ("arabadan inince", .carplayDisconnected, nil),
+            ("uygulamayı açınca", .appOpen, nil), ("uygulamayi acinca", .appOpen, nil), ("when i open the app", .appOpen, nil),
+            ("sabah telefonu açınca", .morningFirstUnlock, nil), ("uyandigimda", .morningFirstUnlock, nil), ("when i unlock my phone in the morning", .morningFirstUnlock, nil),
+            ("spotifyı açınca", .spotifyOpened, nil), ("spotify acinca", .spotifyOpened, nil), ("when i open spotify", .spotifyOpened, nil),
+            ("müzik çalınca", .musicStarted, nil), ("muzik dinlemeye baslayinca", .musicStarted, nil), ("when music starts", .musicStarted, nil),
+            ("kulaklığı takınca", .headphonesConnected, nil), ("headphones connected", .headphonesConnected, nil),
+            ("arabaya binince", .carBluetoothConnected, nil), ("arabadan inince", .carBluetoothDisconnected, nil),
+            ("wifiye bağlanınca", .wifiConnected, nil), ("eve wifisine baglaninca", .homeWifiConnected, nil),
             ("toplantıdan sonra", .calendarEventEnded, nil), ("toplanti bitince", .calendarEventEnded, nil),
-            ("when charging starts", .chargingStarted, nil), ("when i get in my car", .carplayConnected, nil), ("when i leave my car", .carplayDisconnected, nil),
+            ("yürüyüş bitince", .workoutEnded, nil), ("yatmadan önce", .eveningWindow, nil),
+            ("when charging starts", .chargingStarted, nil), ("when i get in my car", .carBluetoothConnected, nil), ("when i leave my car", .carBluetoothDisconnected, nil),
             ("after my meeting", .calendarEventEnded, nil), ("when my meeting ends", .calendarEventEnded, nil),
             ("laptopu açınca", .customContext, nil), ("laptopu acinca", .customContext, nil), ("when i open my laptop", .customContext, nil),
-            ("benzinden sonra", .customContext, nil), ("when i get gas", .customContext, nil)
+            ("benzinden sonra", .geofenceEnter, "gas_station"), ("when i get gas", .geofenceEnter, "gas_station")
         ]
         for (idx, item) in deviceTriggers.enumerated() {
             let action = item.0.contains("when") || item.0.contains("after") ? actionsEN[idx % actionsEN.count] : actionsTR[idx % actionsTR.count]
-            fixtures.append(.init(text: "\(item.0) \(action)", kind: .eventBased, triggerType: item.1, placeAlias: item.2, hasTime: false, hasRecurrence: false, needsSetup: item.1 == .customContext || item.1 == .calendarEventEnded, confidence: 0.25...1.0))
+            let futureSetup: Set<TriggerType> = [.customContext, .calendarEventEnded, .workoutEnded, .spotifyOpened, .musicStarted, .headphonesConnected, .carBluetoothConnected, .carBluetoothDisconnected, .wifiConnected, .homeWifiConnected, .geofenceEnter]
+            let needsSetup = item.1.map { futureSetup.contains($0) } ?? false
+            fixtures.append(.init(text: "\(item.0) \(action)", kind: .eventBased, triggerType: item.1, placeAlias: item.2, hasTime: false, hasRecurrence: false, needsSetup: needsSetup, confidence: 0.25...1.0))
         }
 
         let falsePositives = [
@@ -837,7 +931,7 @@ final class ReminderEngineTests: XCTestCase {
             fixtures.append(.init(text: item, kind: item.contains("tomorrow") ? .oneOff : .timeBased, triggerType: nil, placeAlias: nil, hasTime: item.contains("tomorrow"), hasRecurrence: false, needsSetup: false, confidence: 0.25...1.0))
         }
 
-        while fixtures.count < 120 {
+        while fixtures.count < 150 {
             let idx = fixtures.count
             fixtures.append(.init(text: "\(turkishTimes[idx % turkishTimes.count]) \(actionsTR[idx % actionsTR.count])", kind: .oneOff, triggerType: nil, placeAlias: nil, hasTime: true, hasRecurrence: false, needsSetup: false, confidence: 0.45...1.0))
         }

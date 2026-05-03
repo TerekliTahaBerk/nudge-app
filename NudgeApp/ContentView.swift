@@ -175,6 +175,7 @@ final class AppState: ObservableObject {
             object: nil, queue: .main
         ) { [weak self] _ in
             Task { @MainActor in
+                self?.recordTriggerEvent(TriggerEventSimulator.appOpen())
                 self?.recordMorningFirstUnlockIfNeeded()
                 self?.checkForDueNudges()
             }

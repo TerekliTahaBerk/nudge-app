@@ -77,11 +77,17 @@ Place metadata includes `normalizedAlias`, `displayAlias`, `placeCategory`, `sou
 
 Device/context support:
 
+- App open: actionable local foreground trigger using app lifecycle events.
+- Morning first unlock: modeled honestly as the first morning app foreground after quiet hours, not direct phone unlock detection.
 - Charging started: actionable local trigger.
-- Car enter/exit: modeled as CarPlay/Bluetooth context.
-- Meeting ended: requires calendar access/setup.
+- Gas station/fuel stop: modeled as gas station arrival and remains pending until the `gas_station` alias is saved.
+- Car enter/exit: understood as car Bluetooth/CarPlay context, future adapter or Shortcut setup required.
+- Headphones connected: understood, future adapter or Shortcut setup required.
+- Wi-Fi/home Wi-Fi connected: understood, future adapter or Shortcut setup required.
+- Meeting ended: understood, requires future EventKit adapter and calendar permission before it can fire.
+- Workout ended: understood, requires future fitness adapter and permission before it can fire.
+- Spotify/music started: understood, but not locally actionable without a future integration or Shortcut setup.
 - Laptop opened: unsupported without future companion setup.
-- Fuel stop: unsupported/confirmation fallback.
 
 ## Scheduling Behavior
 
@@ -153,10 +159,16 @@ Tiers:
 | `Her sabah su iç` | Daily recurrence + morning window | Recurring morning reminder |
 | `Spordan çıkınca protein iç` | Gym exit trigger | Event-based, waits for gym exit setup/event |
 | `Sarja takinca su ic` | Charging started trigger | Event-based local device trigger |
+| `Uygulamayı açınca su iç` | App foreground trigger | Event-based local app lifecycle trigger |
 | `Markete gidince süt al` | Market arrival trigger | Pending market alias, no time fallback |
+| `Benzin alınca fişi sakla` | Gas station arrival trigger | Pending gas station alias, no time fallback |
+| `Spotify’ı açınca su iç` | Spotify context | Future integration/Shortcut required, no time fallback |
 | `Laptopu açınca raporu gönder` | Unsupported laptop context | Unsupported/pending companion setup, no schedule |
-| `benzinden sonra fişi sakla` | Low-confidence fuel context | Unsupported/fallback with explanation |
 | `20 dakika sonra acil raporu gönder` + `20 dakika sonra su iç` | Same-window conflict | Urgent reminder goes first; water is staggered |
 | Two home-arrival reminders | Same trigger conflict | One fires on arrival; the rest are staggered |
 | Quiet-hours conflict | First non-quiet window conflict | Winner moves to first non-quiet time; others stagger |
 | Repeated schedule/relaunch | Existing conflict metadata | Resolved stagger order is preserved |
+
+## SwiftUI Render Purity
+
+SwiftUI render paths must stay side-effect free. `body`, `@ViewBuilder` computed properties, and binding helpers used during rendering must not append aliases, save settings, reconcile geofences, start adapters, schedule/cancel notifications, or request permissions. Settings place aliases are normalized during settings decode and `SettingsView.onAppear`; row bindings only read/update existing aliases.

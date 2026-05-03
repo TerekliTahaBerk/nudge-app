@@ -1,6 +1,6 @@
 # Implementation Status — Just Gentle Reminders
 
-Last updated: 2026-05-01
+Last updated: 2026-05-03
 
 ---
 
@@ -15,6 +15,12 @@ Last updated: 2026-05-01
 - Detects app foreground during morning window (after quiet hours end, before 11 AM).
 - Fires `morningFirstUnlock` trigger event once per day.
 - Routes through full trigger → plan → schedule chain.
+- This is documented as a foreground heuristic, not direct phone unlock detection.
+
+### App open
+- Detects `UIApplication.didBecomeActiveNotification`.
+- Fires `appOpen` trigger events through the same trigger → plan → schedule chain.
+- Works while the app is launched/foregrounded; it does not claim third-party app-open detection.
 
 ### Notification actions
 - "Done" marks reminder complete, records positive feedback.
@@ -66,10 +72,12 @@ Last updated: 2026-05-01
 
 ## 2. Working With Setup
 
-### Home / Work / Gym location aliases
-- Settings → Places → "Set here" captures current GPS coordinate.
+### Home / Work / Gym / Gas Station / custom location aliases
+- Settings → Places normalizes default aliases during settings decode/onAppear, not during SwiftUI rendering.
+- Settings → Places → "Set current location" captures current GPS coordinate.
 - After saving, `reconcileLocationTriggers()` replans pending reminders and registers geofences.
 - A reminder like "Eve varınca çöpleri çıkar" shows `missingLocationAlias` until Home is set.
+- A reminder like "Benzin alınca fişi sakla" becomes a `gas_station` arrival trigger and shows `missingLocationAlias` until Gas Station is set.
 
 ### Notification permission
 - Must be granted for any reminder to fire.
@@ -95,12 +103,13 @@ Last updated: 2026-05-01
 
 | Trigger | Reason | Fallback |
 |---------|--------|---------|
+| Spotify opened / music started | iOS cannot reliably detect arbitrary Spotify launch or arbitrary media start locally | Future integration or Shortcut/deep link |
+| Headphones connected | Needs adapter/Shortcut integration for reliable device context | Shortcut or future adapter |
 | Laptop open | iOS cannot detect laptop state without companion app or Bluetooth proximity | Companion app (macOS) or manual one-tap confirm |
-| Fuel stop | No gas-station context without location category + CarPlay/Bluetooth | Shortcuts automation or manual confirm |
-| CarPlay connected | Needs CarPlay hardware or Bluetooth device pairing | Bluetooth trigger if paired |
+| Car Bluetooth / CarPlay connected or disconnected | Needs CarPlay hardware or Bluetooth device pairing adapter | Shortcut or future adapter |
 | Bluetooth connected/disconnected | Framework exists; needs specific device pairing UI | Pending |
-| Calendar event ended | Requires EventKit permission + calendar access | Manual or Shortcuts |
-| Workout ended | Requires HealthKit `HKWorkoutSession` integration | Manual |
+| Calendar event ended | Requires EventKit permission + calendar adapter | Manual or Shortcuts |
+| Workout ended | Requires HealthKit/Fitness integration | Manual |
 | Wi-Fi connected | `NEHotspotHelper` (requires special entitlement) or `Network.framework` | Pending |
 
 ---
@@ -115,3 +124,9 @@ Last updated: 2026-05-01
 | Geofence accuracy 50–200 m | May not fire precisely at boundary; acceptable for most use cases |
 | `requestAlwaysAuthorization` shows two-step dialog on iOS 13+ | User may initially grant `WhenInUse` only; app handles this gracefully |
 | Background app refresh can be disabled by user | May reduce reliability of geofence delivery |
+
+---
+
+## 6. Engineering Guardrails
+
+SwiftUI render paths are intentionally side-effect free. `body`, render-time helper methods, and binding factories must not append aliases, save settings, reconcile geofences, request permissions, start adapters, or schedule/cancel notifications. Settings place aliases are normalized in decode/onAppear and updated only through explicit user actions.

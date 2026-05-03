@@ -142,7 +142,10 @@ struct SettingsView: View {
                 }
             }
         }
-        .onAppear { draft = state.settings }
+        .onAppear {
+            draft = state.settings
+            draft.locationAliases = LocationAliasCatalog.normalized(draft.locationAliases)
+        }
         .onDisappear { state.updateSettings(draft) }
     }
 
@@ -231,23 +234,84 @@ struct PlacesSection: View {
     @Binding var aliases: [LocationAlias]
     let onSaved: () -> Void
 
-    private let canonicalNames = ["home", "work", "gym"]
-
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
-            ForEach(canonicalNames, id: \.self) { name in
-                PlaceRow(name: name, alias: aliasBinding(for: name), onSaved: onSaved)
+            ForEach(aliases) { alias in
+                PlaceRow(name: alias.name, alias: aliasBinding(for: alias), onSaved: onSaved)
             }
+            PlaceRowsFooter(aliases: $aliases)
         }
     }
 
-    private func aliasBinding(for name: String) -> Binding<LocationAlias> {
-        if let idx = aliases.firstIndex(where: { $0.name == name }) {
-            return $aliases[idx]
+    private func aliasBinding(for alias: LocationAlias) -> Binding<LocationAlias> {
+        Binding(
+            get: {
+                aliases.first(where: { $0.id == alias.id }) ?? alias
+            },
+            set: { updated in
+                guard let idx = aliases.firstIndex(where: { $0.id == alias.id }) else { return }
+                aliases[idx] = updated
+            }
+        )
+    }
+}
+
+extension PlacesSection {
+    static func normalizedAliasesForRendering(_ aliases: [LocationAlias]) -> [LocationAlias] {
+        LocationAliasCatalog.normalized(aliases)
+    }
+}
+
+private struct RenderPurityRegressionNote {
+    static let settingsPlaces = "PlacesSection must not append aliases while SwiftUI renders. Normalize in AppSettings/onAppear, then bind existing rows only."
+}
+
+private struct PlaceNameEditor: View {
+    @Binding var name: String
+
+    var body: some View {
+        TextField("Place", text: $name)
+            .font(JGRFont.regular(17))
+            .foregroundStyle(Color.jgrT1)
+            .tracking(-0.2)
+            .textInputAutocapitalization(.words)
+            .disableAutocorrection(true)
+    }
+}
+
+private extension LocationAlias {
+    var displayName: String {
+        LocationAliasCatalog.displayName(name)
+    }
+}
+
+private extension Array where Element == LocationAlias {
+    var normalizedForSettingsRender: [LocationAlias] {
+        LocationAliasCatalog.normalized(self)
+    }
+}
+
+private struct PlaceRowsFooter: View {
+    @Binding var aliases: [LocationAlias]
+
+    var body: some View {
+        Button("Add custom place") {
+            let base = "custom_place"
+            let existing = Set(aliases.map { $0.name })
+            let name: String
+            if !existing.contains(base) {
+                name = base
+            } else {
+                var idx = 2
+                while existing.contains("\(base)_\(idx)") { idx += 1 }
+                name = "\(base)_\(idx)"
+            }
+            aliases.append(LocationAlias(name: name))
         }
-        aliases.append(LocationAlias(name: name))
-        let idx = aliases.count - 1
-        return $aliases[idx]
+        .font(JGRFont.regular(14))
+        .foregroundStyle(Color.jgrT2)
+        .frame(minHeight: 44, alignment: .leading)
+        .buttonStyle(.plain)
     }
 }
 
@@ -264,14 +328,22 @@ struct PlaceRow: View {
     private var permissionDenied: Bool {
         authorizationStatus == .denied || authorizationStatus == .restricted
     }
+    private var aliasNameBinding: Binding<String> {
+        Binding<String>(
+            get: {
+                alias.displayName
+            },
+            set: { newName in
+                alias.name = LocationAliasCatalog.canonicalName(newName)
+            }
+        )
+    }
 
     var body: some View {
         HStack(alignment: .center) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(name.capitalized)
-                    .font(JGRFont.regular(17))
-                    .foregroundStyle(Color.jgrT1)
-                    .tracking(-0.2)
+                PlaceNameEditor(name: aliasNameBinding)
+                    .disabled(LocationAliasCatalog.defaultNames.contains(alias.name))
                 if permissionDenied {
                     Text("Location permission denied")
                         .font(JGRFont.regular(12.5))

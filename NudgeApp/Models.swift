@@ -256,18 +256,27 @@ struct TriggerInfo: Codable, Hashable {
 }
 
 enum TriggerType: String, Codable, CaseIterable, Hashable {
+    case appOpen = "app_open"
     case geofenceEnter = "geofence_enter"
     case geofenceExit = "geofence_exit"
     case deviceUnlock = "device_unlock"
     case chargingStarted = "charging_started"
+    case musicStarted = "music_started"
+    case spotifyOpened = "spotify_opened"
+    case mediaContextUnsupported = "media_context_unsupported"
+    case headphonesConnected = "headphones_connected"
     case bluetoothConnected = "bluetooth_connected"
     case bluetoothDisconnected = "bluetooth_disconnected"
+    case carBluetoothConnected = "car_bluetooth_connected"
+    case carBluetoothDisconnected = "car_bluetooth_disconnected"
     case carplayConnected = "carplay_connected"
     case carplayDisconnected = "carplay_disconnected"
     case wifiConnected = "wifi_connected"
+    case homeWifiConnected = "home_wifi_connected"
     case workoutEnded = "workout_ended"
     case calendarEventEnded = "calendar_event_ended"
     case morningFirstUnlock = "morning_first_unlock"
+    case eveningWindow = "evening_window"
     case customContext = "custom_context"
     case unknownRequiresClarification = "unknown_requires_clarification"
 }
@@ -563,6 +572,58 @@ struct LocationAlias: Codable, Identifiable, Hashable {
     }
 }
 
+enum LocationAliasCatalog {
+    static let defaultNames = ["home", "work", "gym", "gas_station"]
+
+    static func normalized(_ aliases: [LocationAlias]) -> [LocationAlias] {
+        var result: [LocationAlias] = []
+        var seen = Set<String>()
+
+        for name in defaultNames {
+            if let existing = aliases.first(where: { canonicalName($0.name) == name }) {
+                var alias = existing
+                alias.name = name
+                result.append(alias)
+            } else {
+                result.append(LocationAlias(name: name))
+            }
+            seen.insert(name)
+        }
+
+        for alias in aliases {
+            let key = canonicalName(alias.name)
+            guard !seen.contains(key) else { continue }
+            var normalized = alias
+            normalized.name = key
+            result.append(normalized)
+            seen.insert(key)
+        }
+
+        return result
+    }
+
+    static func canonicalName(_ name: String) -> String {
+        TriggerParser.normalize(name)
+            .replacingOccurrences(of: " ", with: "_")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    static func displayName(_ name: String) -> String {
+        switch canonicalName(name) {
+        case "home": return "Home"
+        case "work": return "Work"
+        case "gym": return "Gym"
+        case "gas_station": return "Gas Station"
+        default:
+            return name
+                .replacingOccurrences(of: "_", with: " ")
+                .split(separator: " ")
+                .map { $0.capitalized }
+                .joined(separator: " ")
+        }
+    }
+}
+
 enum PermissionStatus: String, Codable, Hashable {
     case unknown
     case granted
@@ -793,7 +854,7 @@ struct AppSettings: Codable {
         self.easedBackAcknowledged = try c.decodeIfPresent(Bool.self, forKey: .easedBackAcknowledged) ?? false
         self.userRhythmProfile     = try c.decodeIfPresent(UserRhythmProfile.self, forKey: .userRhythmProfile) ?? UserRhythmProfile()
         self.quietHours            = try c.decodeIfPresent(QuietHours.self, forKey: .quietHours) ?? QuietHours(startHour: self.quietHoursStart, endHour: self.quietHoursEnd)
-        self.locationAliases       = try c.decodeIfPresent([LocationAlias].self, forKey: .locationAliases) ?? []
+        self.locationAliases       = LocationAliasCatalog.normalized(try c.decodeIfPresent([LocationAlias].self, forKey: .locationAliases) ?? [])
         self.permissionStates      = try c.decodeIfPresent([PermissionState].self, forKey: .permissionStates) ?? []
         self.triggerEventLog       = try c.decodeIfPresent([TriggerEventLog].self, forKey: .triggerEventLog) ?? []
         self.nudgeHistory          = try c.decodeIfPresent([NudgeHistory].self, forKey: .nudgeHistory) ?? []

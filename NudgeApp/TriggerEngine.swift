@@ -14,6 +14,9 @@ enum TriggerParser {
         let text = ReminderInputValidator.sanitize(rawText)
         let lower = normalize(text)
 
+        if containsAny(lower, ["uygulamayi acinca", "uygulamayı acınca", "appi acinca", "appı acınca", "app i acinca", "app ı acınca", "when i open the app", "when the app opens"]) {
+            return event(.appOpen, raw: text, confidence: 0.9, permissions: [.notifications])
+        }
         if containsAny(lower, ["eve varinca", "eve gelince", "eve ulasinca", "when i get home", "when i arrive home", "when i come home"]) {
             return place(.geofenceEnter, alias: "home", raw: text, confidence: 0.88)
         }
@@ -51,6 +54,12 @@ enum TriggerParser {
         }
         if containsAny(lower, ["sarja takinca", "telefonu sarja takinca", "when i plug in", "when charging starts"]) {
             return event(.chargingStarted, raw: text, confidence: 0.9, permissions: [.notifications])
+        }
+        if containsAny(lower, ["spotifyi acinca", "spotifyı acınca", "spotify acinca", "spotify acınca", "spotify i acinca", "spotify ı acınca", "when i open spotify"]) {
+            return future(.spotifyOpened, subject: "spotify", raw: text, confidence: 0.68, explanation: "Spotify/music triggers need a future integration or Shortcut setup.")
+        }
+        if containsAny(lower, ["sarki acinca", "sarkı acınca", "muzik calinca", "muzik calınca", "muzik dinlemeye baslayinca", "muzik dinlemeye baslayınca", "when i play music", "when music starts", "when i start listening to music"]) {
+            return future(.musicStarted, subject: "music", raw: text, confidence: 0.68, explanation: "Spotify/music triggers need a future integration or Shortcut setup.")
         }
         if containsAny(lower, ["sabah telefonu acinca", "sabah ilk acinca", "unlock in the morning", "morning first unlock"]) {
             return event(.morningFirstUnlock, raw: text, confidence: 0.82, permissions: [.notifications])
@@ -93,22 +102,8 @@ enum TriggerParser {
                 explanation: "Laptop open is not directly available on iOS, so this needs a companion or fallback signal."
             )
         }
-        if containsAny(lower, ["benzin alinca", "yakit alinca", "gas alinca", "when i get gas", "when i buy fuel", "at the gas station"]) {
-            let condition = TriggerCondition(
-                type: .customContext,
-                subject: "fuel_stop",
-                metadata: ["fallback": "gas_station_location_car_bluetooth_confirmation", "actionable": "false"],
-                requiresPermission: [.notifications, .location, .bluetooth],
-                minimumConfidence: 0.8
-            )
-            return Result(
-                condition: condition,
-                reminderText: stripTriggerPhrase(from: text),
-                confidence: 0.42,
-                needsClarification: true,
-                clarifyingQuestion: "I can watch for gas-station context, but I should confirm this setup first.",
-                explanation: "Fuel stops need location category plus car/Bluetooth or confirmation fallback."
-            )
+        if containsAny(lower, ["benzin alinca", "benzin alınca", "yakit alinca", "yakit alınca", "yakıt alınca", "gas alinca", "when i get gas", "when i buy fuel", "at the gas station"]) {
+            return place(.geofenceEnter, alias: "gas_station", raw: text, confidence: 0.82)
         }
 
         return Result(
@@ -167,6 +162,24 @@ enum TriggerParser {
         )
     }
 
+    private static func future(_ type: TriggerType, subject: String, raw: String, confidence: Double, explanation: String) -> Result {
+        Result(
+            condition: TriggerCondition(
+                type: type,
+                subject: subject,
+                metadata: ["actionable": "false", "fallback": "future_adapter_or_shortcuts"],
+                requiresPermission: [.notifications],
+                minimumConfidence: 0.65,
+                cooldownSeconds: 3600
+            ),
+            reminderText: stripTriggerPhrase(from: raw),
+            confidence: confidence,
+            needsClarification: true,
+            clarifyingQuestion: explanation,
+            explanation: explanation
+        )
+    }
+
     private static func containsAny(_ text: String, _ phrases: [String]) -> Bool {
         phrases.contains { text.contains($0) }
     }
@@ -187,7 +200,10 @@ enum TriggerParser {
             "carplay baglaninca", "carplay ayrilinca", "bluetooth baglaninca",
             "bluetooth ayrilinca", "laptopu acinca", "laptopumu acinca", "bilgisayarimi acinca", "bilgisayarimin kapagini acinca",
             "toplantidan sonra", "toplanti bitince", "antrenman bitince", "spor bitince",
-            "benzin alinca", "yakit alinca", "gas alinca",
+            "uygulamayi acinca", "uygulamayı acınca", "appi acinca", "appı acınca", "app i acinca", "app ı acınca",
+            "spotifyi acinca", "spotifyı acınca", "spotify acinca", "spotify acınca", "spotify i acinca", "spotify ı acınca",
+            "sarki acinca", "sarkı acınca", "muzik calinca", "muzik calınca", "muzik dinlemeye baslayinca", "muzik dinlemeye baslayınca",
+            "benzin alinca", "benzin alınca", "yakit alinca", "yakit alınca", "yakıt alınca", "gas alinca",
             "when i get home", "when i arrive home", "when i arrive at work",
             "when i get to work", "when i leave work", "when i leave the office",
             "when i leave home", "when i get to the gym", "when i arrive at the gym",
@@ -200,7 +216,9 @@ enum TriggerParser {
             "when i leave my car", "bluetooth connected", "bluetooth disconnected",
             "after my meeting", "after the meeting", "when my meeting ends",
             "workout ends", "after workout", "when my workout ends",
-            "open my laptop", "when i open my laptop", "when i get gas", "when i buy fuel",
+            "open my laptop", "when i open my laptop", "when i open the app", "when the app opens",
+            "when i open spotify", "when i play music", "when music starts", "when i start listening to music",
+            "when i get gas", "when i buy fuel",
             "at the gas station"
         ]
         for phrase in triggerPhrases {
@@ -219,6 +237,9 @@ enum TriggerParser {
 enum TriggerResolver {
     static func resolve(_ condition: TriggerCondition, aliases: [LocationAlias], permissions: [PermissionState]) -> TriggerResolution {
         if condition.type == .customContext || condition.type == .unknownRequiresClarification {
+            return TriggerResolution(isReady: false, condition: condition, missingPermissions: [], fallback: FallbackStrategy.strategy(for: condition))
+        }
+        if condition.metadata["actionable"] == "false" {
             return TriggerResolution(isReady: false, condition: condition, missingPermissions: [], fallback: FallbackStrategy.strategy(for: condition))
         }
         let missing = condition.requiresPermission.filter { needed in
@@ -276,6 +297,10 @@ enum TriggerExecutionPolicy {
 }
 
 enum TriggerEventSimulator {
+    static func appOpen(now: Date = .now) -> TriggerEvent {
+        TriggerEvent(type: .appOpen, subject: TriggerType.appOpen.rawValue, confidence: 0.95, createdAt: now)
+    }
+
     static func morningFirstUnlock(now: Date = .now) -> TriggerEvent {
         TriggerEvent(type: .morningFirstUnlock, subject: TriggerType.morningFirstUnlock.rawValue, confidence: 0.95, createdAt: now)
     }
@@ -310,6 +335,8 @@ enum FallbackStrategy: Codable, Hashable {
 
     static func strategy(for condition: TriggerCondition) -> FallbackStrategy {
         switch condition.type {
+        case .appOpen:
+            return .manualReminder
         case .geofenceEnter, .geofenceExit:
             return condition.locationAlias.map { .askToDefineLocation($0) } ?? .manualReminder
         case .customContext:
@@ -318,6 +345,10 @@ enum FallbackStrategy: Codable, Hashable {
             return .manualReminder
         case .calendarEventEnded:
             return .manualReminder
+        case .spotifyOpened, .musicStarted, .mediaContextUnsupported:
+            return .shortcutsAutomation
+        case .headphonesConnected, .carBluetoothConnected, .carBluetoothDisconnected, .wifiConnected, .homeWifiConnected, .workoutEnded:
+            return .shortcutsAutomation
         default:
             return .manualReminder
         }
@@ -327,7 +358,7 @@ enum FallbackStrategy: Codable, Hashable {
         switch self {
         case .askToDefineLocation(let alias): return "Needs saved \(alias) location."
         case .oneTapConfirmation: return "Needs a confirmation or fallback setup before firing."
-        case .shortcutsAutomation: return "Needs an automation signal."
+        case .shortcutsAutomation: return "Needs a future integration or Shortcut setup."
         case .companionOrSignal: return "Needs companion app, Bluetooth, Wi-Fi, or manual fallback."
         case .manualReminder: return "Can fall back to a manual or time-based reminder."
         }

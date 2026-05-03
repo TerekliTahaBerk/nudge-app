@@ -39,6 +39,22 @@ struct AddReminderView: View {
         ReminderInputValidator.validate(text, allowsEmpty: kind == .voice)
     }
     private var hasText: Bool   { ReminderInputValidator.validate(text).isValid }
+    private var interpretationLine: String? {
+        guard let parsedIntent else { return nil }
+        if let readiness = parsedIntent.triggerReadiness {
+            if !readiness.isCurrentlyActionable {
+                return readiness.explanation
+            }
+            if !readiness.requiredSetup.isEmpty {
+                let setup = readiness.requiredSetup[0]
+                    .replacingOccurrences(of: "saved_", with: "")
+                    .replacingOccurrences(of: "_", with: " ")
+                    .capitalized
+                return "Needs \(setup)"
+            }
+        }
+        return parsedIntent.interpretationSummary.isEmpty ? parsedIntent.explanation?.text : parsedIntent.interpretationSummary
+    }
 
     // Saveability rules differ by kind. Voice doesn't need text; trigger needs both.
     private var ready: Bool {
@@ -68,7 +84,7 @@ struct AddReminderView: View {
         _trigger = State(initialValue: editingReminder?.trigger ?? editingReminder?.triggerDefinition.map(Self.triggerInfo))
         _voice = State(initialValue: editingReminder?.voice)
         _link = State(initialValue: editingReminder?.link)
-        _parsedIntent = State(initialValue: nil)
+        _parsedIntent = State(initialValue: initialText.isEmpty ? nil : ReminderUnderstandingEngine.parse(initialText))
         _userPickedFrequency = State(initialValue: editingReminder != nil)
     }
 
@@ -172,6 +188,16 @@ struct AddReminderView: View {
                                 }
                             )
                             .padding(.horizontal, 32)
+                        }
+
+                        if let interpretationLine, hasText {
+                            Spacer().frame(height: 14)
+                            Text(interpretationLine)
+                                .font(JGRFont.regular(13))
+                                .foregroundStyle(Color.jgrT3)
+                                .lineSpacing(2)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .padding(.horizontal, 32)
                         }
 
                         Spacer().frame(height: 28)

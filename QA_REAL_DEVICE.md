@@ -21,7 +21,12 @@ This checklist is for real-device readiness only. Keep the app calm and unchange
 - Morning first unlock heuristic:
   - Create a reminder such as `Sabah telefonu açınca meditasyon yap`.
   - Relaunch/foreground the app between quiet-hours end and 11:00.
-  - Confirm the simulated `morning_first_unlock` event can produce a scheduled plan once per day.
+  - Confirm the `morning_first_unlock` event can produce a scheduled plan once per day.
+  - Confirm UI copy does not claim direct phone unlock detection; this is a morning foreground heuristic.
+- App open trigger:
+  - Create `Uygulamayı açınca su iç`.
+  - Background and foreground the app.
+  - Confirm the `app_open` event produces a scheduled plan and does not require a fake external signal.
 - Charging trigger (real adapter — `IOSDeviceContextAdapter`):
   - `UIDevice.isBatteryMonitoringEnabled` is enabled at app launch.
   - Plug charger in while app is active or backgrounded — notification must fire within 10 seconds.
@@ -170,7 +175,7 @@ This checklist is for real-device readiness only. Keep the app calm and unchange
 ## Location Alias Setup
 
 1. Open Settings → Places.
-2. Confirm Home, Work, and Gym each show either `Saved`, `Not set`, or `Location permission denied`.
+2. Confirm Home, Work, Gym, and Gas Station each show either `Saved`, `Not set`, or `Location permission denied`.
 3. For "Home": tap "Set current location" while physically at home.
 4. If permission is denied, confirm the row says location permission is off/denied and fails gracefully.
 5. If location fetch fails, confirm a short error appears and the app does not crash.
@@ -280,8 +285,20 @@ This checklist is for real-device readiness only. Keep the app calm and unchange
 | Input | Expected behavior |
 |-------|------------------|
 | `Laptopu açınca raporu gönder` | Saved as `unsupported`, `needsClarification = true`. No fake activation. |
-| `Benzin alınca fişi sakla` | Saved as `unsupported`, `needsClarification = true`. |
-| `Arabaya binince annemi ara` | Saved as `carplayConnected` trigger — requires CarPlay or Bluetooth. Clarification note shown. |
+| `Spotify’ı açınca su iç` | Saved as `spotify_opened`, future integration/Shortcut required. No generic time fallback. |
+| `Müzik çalınca esne` | Saved as `music_started`, future integration/Shortcut required. No generic time fallback. |
+| `Kulaklığı takınca su iç` | Saved as `headphones_connected`, future adapter/Shortcut required. |
+| `Arabaya binince annemi ara` | Saved as car Bluetooth/CarPlay context, future adapter/Shortcut required. |
+| `Wi-Fi’ye bağlanınca notları gönder` | Saved as Wi-Fi context, future adapter/Shortcut required. |
+| `Benzin alınca fişi sakla` | Saved as `geofence_enter` for `gas_station`; pending Gas Station alias if not set. |
+
+## SwiftUI Render Purity Regression
+
+1. Open Settings repeatedly on a fresh install with no aliases saved.
+2. Confirm Home, Work, Gym, and Gas Station appear without a crash.
+3. Navigate away and back several times.
+4. Confirm the app does not append duplicate default aliases.
+5. Confirm permission prompts only appear after tapping a setup button, never merely from rendering Settings.
 
 ---
 
